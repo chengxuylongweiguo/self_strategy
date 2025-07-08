@@ -15,7 +15,7 @@ class Params(BaseParams):
     exchange: str = Field(default="CFFEX", title="交易所")
     instrument_id: str = Field(default="IM2507", title="合约代码")
     option_code: str = Field(default="MO2507-P-6400", title="期权代码")
-    steps: int = Field(default=5, title="下单手数", ge=1)
+    steps: int = Field(default=5, title="网格层数", ge=1)
     pay_up: float = Field(default=0.2, title="滑价超价")
     kline_style: KLineStyleType = Field(default="M1", title="K线周期")
 
@@ -124,7 +124,7 @@ class OptionsDemo(BaseStrategy):
     def callback(self, kline: KLineData) -> None:
         kline_list = self.market_center.get_kline_data(
                                         exchange="CFFEX",
-                                        instrument_id="000852",
+                                        instrument_id="IM2507",
                                         style=self.params_map.kline_style,
                                         count=-1
                                     )
@@ -134,14 +134,13 @@ class OptionsDemo(BaseStrategy):
         # 1. 获取当前网格目标仓位
         key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - stock_price))
         target_pos = self.position_map.get(key, 0)
-
+        
         # 2. 获取当前净仓位
         current_pos = self.get_position(self.params_map.instrument_id).net_position
         # 3. 差额 = 目标仓位 - 当前仓位
         delta = target_pos - current_pos
         signal_price = 0
         if delta > 0:
-            
             # 需要加仓
             price = signal_price = kline.close + self.params_map.pay_up
             self.order_ids.add(

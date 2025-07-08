@@ -1,9 +1,10 @@
 from pythongo.base import BaseParams, Field
 from pythongo.classdef import KLineData, TickData
-from pythongo.core import KLineStyleType
+from pythongo.core import KLineStyleType,MarketCenter
 from pythongo.ui import BaseStrategy
 from pythongo.utils import KLineGenerator
- 
+from WindPy import w
+w.start()
  
 class Params(BaseParams):
     """参数映射模型"""
@@ -19,7 +20,7 @@ class DemoKLine(BaseStrategy):
     def __init__(self) -> None:
         super().__init__()
         self.params_map = Params()
- 
+        self.market_center = MarketCenter()
         self.fast_ma = 0.0
         self.slow_ma = 0.0
  
@@ -37,6 +38,8 @@ class DemoKLine(BaseStrategy):
         return rules
     
     def on_start(self) -> None:
+        a = w.wsi("000852.SH", "close", "2025-07-08 14:00:50", "2025-07-08 14:00:50", "Fill=Previous")
+        self.output(a.Data[0][0])
         self.kline_generator = KLineGenerator(
             real_time_callback=self.real_time_callback, #用于在 当前这根K线形成过程中，每次 tick 推送触发的处理逻辑（比如实时计算指标）
             callback=self.callback, #每根 完整K线 收盘时触发的回调函数，通常用于下单、记录信号
@@ -44,6 +47,9 @@ class DemoKLine(BaseStrategy):
             instrument_id=self.params_map.instrument_id,#合约代码
             style=self.params_map.kline_style #k线周期
         )
+
+        
+
         self.kline_generator.push_history_data()
         super().on_start()
  

@@ -1,8 +1,9 @@
 from typing import Literal
- 
 from pythongo.base import BaseParams, BaseState, BaseStrategy, Field
 from pythongo.classdef import OrderData
- 
+from pythongo.core import MarketCenter
+from WindPy import w
+w.start()
  
 class Params(BaseParams):
     """参数映射模型"""
@@ -22,6 +23,7 @@ class DemoTest(BaseStrategy):
     """我的第一个策略"""
     def __init__(self) -> None:
         super().__init__()
+        self.market_center = MarketCenter()
         self.params_map = Params()
         self.state_map = State()
  
@@ -31,7 +33,13 @@ class DemoTest(BaseStrategy):
  
     def on_start(self) -> None:
         super().on_start()
- 
+        kline_list = self.market_center.get_kline_data(
+                                        exchange="CFFEX",
+                                        instrument_id="IM2507",
+                                        style='M1',
+                                        count=1
+                                    )
+        print(kline_list)
         self.state_map.order_id = self.send_order(
             exchange=self.params_map.exchange,
             instrument_id=self.params_map.instrument_id,
