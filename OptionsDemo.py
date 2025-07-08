@@ -123,13 +123,13 @@ class OptionsDemo(BaseStrategy):
 
     def callback(self, kline: KLineData) -> None:
         kline_list = self.market_center.get_kline_data(
-                                        exchange="CFFEX",
-                                        instrument_id="IM2507",
+                                        exchange="SSE",
+                                        instrument_id="000852",
                                         style=self.params_map.kline_style,
                                         count=-1
                                     )
+        
         option_code = "MO2507-C-6400"
-
         stock_price = kline.close
         # 1. 获取当前网格目标仓位
         key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - stock_price))

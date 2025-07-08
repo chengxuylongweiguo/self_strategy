@@ -38,8 +38,13 @@ class DemoKLine(BaseStrategy):
         return rules
     
     def on_start(self) -> None:
-        a = w.wsi("000852.SH", "close", "2025-07-08 14:00:50", "2025-07-08 14:00:50", "Fill=Previous")
-        self.output(a.Data[0][0])
+        kline_list = self.market_center.get_kline_data(
+                                        exchange="SSE",
+                                        instrument_id="000852",
+                                        style='M1',
+                                        count=-1
+                                    )
+        self.output(kline_list)
         self.kline_generator = KLineGenerator(
             real_time_callback=self.real_time_callback, #用于在 当前这根K线形成过程中，每次 tick 推送触发的处理逻辑（比如实时计算指标）
             callback=self.callback, #每根 完整K线 收盘时触发的回调函数，通常用于下单、记录信号
