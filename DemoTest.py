@@ -6,8 +6,8 @@ from pythongo.classdef import OrderData
  
 class Params(BaseParams):
     """参数映射模型"""
-    exchange: str = Field(default="", title="交易所代码")
-    instrument_id: str = Field(default="", title="合约代码")
+    exchange: str = Field(default="CFFEX", title="交易所代码")
+    instrument_id: str = Field(default="IM2507", title="合约代码")
     order_price: int | float = Field(default=0, title="报单价格")
     order_volume: int = Field(default=1, title="报单手数")
     order_direction: Literal["buy", "sell"] = Field(default="buy", title="报单方向")

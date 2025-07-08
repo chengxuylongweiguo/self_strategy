@@ -7,8 +7,8 @@ from pythongo.utils import KLineGenerator
  
 class Params(BaseParams):
     """参数映射模型"""
-    exchange: str = Field(default="", title="交易所代码")
-    instrument_id: str = Field(default="", title="合约代码")
+    exchange: str = Field(default="CFFEX", title="交易所代码")
+    instrument_id: str = Field(default="IM2507", title="合约代码")
     fast_period: int = Field(default=5, title="快均线周期", ge=2)
     slow_period: int = Field(default=20, title="慢均线周期")
     kline_style: KLineStyleType = Field(default="M1", title="K 线周期")
@@ -26,18 +26,23 @@ class DemoKLine(BaseStrategy):
     @property
     def main_indicator_data(self) -> dict[str, float]:
         """主图指标"""
-        return {
-            f"MA{self.params_map.fast_period}": self.fast_ma,
-            f"MA{self.params_map.slow_period}": self.slow_ma,
-        }
- 
+        start = 6270
+        end = 6330
+        steps = 3
+        price_step = (end - start) / steps
+        rules = {}
+        for i in range(steps + 1):
+            price = round(start + i * price_step, 3)
+            rules[f'P{i}'] = price
+        return rules
+    
     def on_start(self) -> None:
         self.kline_generator = KLineGenerator(
-            real_time_callback=self.real_time_callback,
-            callback=self.callback,
-            exchange=self.params_map.exchange,
-            instrument_id=self.params_map.instrument_id,
-            style=self.params_map.kline_style
+            real_time_callback=self.real_time_callback, #用于在 当前这根K线形成过程中，每次 tick 推送触发的处理逻辑（比如实时计算指标）
+            callback=self.callback, #每根 完整K线 收盘时触发的回调函数，通常用于下单、记录信号
+            exchange=self.params_map.exchange,#交易所代码
+            instrument_id=self.params_map.instrument_id,#合约代码
+            style=self.params_map.kline_style #k线周期
         )
         self.kline_generator.push_history_data()
         super().on_start()

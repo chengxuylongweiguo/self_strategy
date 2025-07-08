@@ -36,7 +36,7 @@ class DemoDMA(BaseStrategy):
         """状态表"""
 
         self.kline_generator: KLineGenerator = None
-        """ K 线合成器"""
+        """K 线合成器"""
 
         self.pre_fast_ma = 0
         """上一根 K 线快均线数值"""

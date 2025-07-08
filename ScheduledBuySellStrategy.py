@@ -8,7 +8,7 @@ from pythongo.ui import BaseStrategy
 class Params(BaseParams):
     """参数设置"""
     exchange: str = Field(default="CFFEX", title="交易所")
-    instrument_id: str = Field(default="IF2507", title="合约代码")
+    instrument_id: str = Field(default="MO2507-C-6300", title="合约代码")
     order_volume: int = Field(default=1, title="下单手数", ge=1)
     pay_up: float = Field(default=0.2, title="滑价超价")
     kline_style: KLineStyleType = Field(default="M1", title="K线周期")
@@ -16,7 +16,7 @@ class Params(BaseParams):
 
 class State(BaseState):
     """状态设置"""
-    bought: bool = Field(default=False, title="是否已经买入")
+    bought: int = Field(default=1, title="是否已经买入")
 
 
 class ScheduledBuySellStrategy(BaseStrategy):
@@ -37,33 +37,15 @@ class ScheduledBuySellStrategy(BaseStrategy):
         t: time = tick.datetime.time()
 
         # 判断是否是 15:50（买入）
-        if t.hour == 15 and t.minute == 50 and not self.state_map.bought:
-            price = tick.last_price + self.params_map.pay_up
-            order_id = self.send_order(
-                exchange=self.params_map.exchange,
-                instrument_id=self.params_map.instrument_id,
-                volume=self.params_map.order_volume,
-                price=price,
-                order_direction="buy"
-            )
-            self.order_ids.add(order_id)
-            self.state_map.bought = True
+        if t.hour == 15 and t.minute == 31 and not self.state_map.bought:
+            position = self.get_position(self.params_map.instrument_id)
+            self.state_map.bought = position.net_position
             
 
         # 判断是否是 15:55（卖出）
-        if t.hour == 15 and t.minute == 55 and self.state_map.bought:
+        if t.hour == 15 and t.minute == 33 and self.state_map.bought:
             position = self.get_position(self.params_map.instrument_id)
-            if position.net_position > 0:
-                price = tick.last_price - self.params_map.pay_up
-                order_id = self.send_order(
-                    exchange=self.params_map.exchange,
-                    instrument_id=self.params_map.instrument_id,
-                    volume=position.net_position,
-                    price=price,
-                    order_direction="sell"
-                )
-                self.order_ids.add(order_id)
-                self.state_map.bought = False
+            self.state_map.bought = position.net_position
                 
 
     def on_trade(self, trade: TradeData, log: bool = False) -> None:
@@ -79,3 +61,4 @@ class ScheduledBuySellStrategy(BaseStrategy):
 
     def on_stop(self) -> None:
         super().on_stop()
+    
