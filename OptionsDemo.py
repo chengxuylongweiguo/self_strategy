@@ -129,7 +129,14 @@ class OptionsDemo(BaseStrategy):
             instrument_id=self.params_map.instrument_id,
             style=self.params_map.kline_style
         )
-
+        self.kline_generator_option = KLineGenerator(
+            real_time_callback=self.real_time_callback,
+            callback=self.callback,
+            exchange=self.params_map.exchange,
+            instrument_id=self.params_map.instrument_id,
+            style=self.params_map.kline_style
+        )
+        
         self.kline_generator_index = KLineGenerator(
             real_time_callback=self.real_time_callback_index,
             callback=self.callback_index,
@@ -145,7 +152,7 @@ class OptionsDemo(BaseStrategy):
             style='M5'
         )
         self.kline_generator.push_history_data()
-        #self.kline_generator_index.push_history_data()
+        self.kline_generator_index.push_history_data()
         self.kline_generator_m5.push_history_data()
         super().on_start()
     
@@ -196,7 +203,7 @@ class OptionsDemo(BaseStrategy):
         # 1. 获取当前网格目标仓位
         futures_price = kline.close
         key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - futures_price))
-        
+        signal_price = 0
         if key != self.key:
             self.key = key
             delta,gamma = self.calculate_option_greeks(self.option_code)
@@ -208,7 +215,7 @@ class OptionsDemo(BaseStrategy):
 
             current_pos = self.get_position(self.params_map.instrument_id).net_position # 2. 获取当前futures净仓位
             delta_position = futures_position - current_pos
-            signal_price = 0
+            
             self.output("sfskjfsksdl")
             if delta_position > 0 and futures_price > target_price:
                 # 需要加仓
@@ -262,7 +269,7 @@ class OptionsDemo(BaseStrategy):
 
     def callback_m5(self, kline: KLineData) -> None:
         close_std_array = self.kline_generator_m5.producer.std(timeperiod=6,array=True)
-        self.output(close_std_array[-5:])
+        #self.output(close_std_array[-5:])
         
         
     
