@@ -2,7 +2,7 @@ from datetime import datetime
 import pandas as pd
 import math
 import re
-from typing import Literal
+from typing import Literal,Union
 import numpy as np
 from scipy.stats import norm
 from pythongo.base import BaseParams, BaseState, Field
@@ -26,7 +26,8 @@ class State(BaseState):
     """状态设置"""
     close_std: float = Field(default=0, title="标准差")
     k: int = Field(default=0, title="状态")
-class OptionsDemo1(BaseStrategy):
+
+class OptionsDemo2(BaseStrategy):
     def __init__(self) -> None:
         super().__init__()
         self.market_center = MarketCenter()
@@ -36,12 +37,13 @@ class OptionsDemo1(BaseStrategy):
         self.index_price: float = 0.0
         self.option_price: float = 0.0
         self.option_code: str = self.params_map.option_code
+        self.open_signal: Union[bool, str] = False
+        self.iv_start_close = 0 #波动开始的价格
         self.max_5_percentile = 0
         self.latest_ma_std = 0
         self.start = 6360
         self.end = 6410
         self.key = 0
-        self.t = 0
         self.rules = self.main_indicator_data
         self.position_map = {'P0': 5,
                                 'P1': 4,
@@ -69,6 +71,37 @@ class OptionsDemo1(BaseStrategy):
             "M5-0.9":self.max_5_percentile,
             "std_ma":self.latest_ma_std,
         }
+    
+    #进场信号
+    def analyze_volatility_structure(self):
+        """
+        进场信号，记录波动开始的价格iv_start_close、标准差self.state_map.close_std、标准差均值self.latest_ma_std。
+        返回：方向：'rise' or 'fall'
+        """
+        close_array = self.kline_generator.producer.close
+        if len(close_array) < 400 :
+            return False # 数据不足时不分析
+        close_series = pd.Series(close_array)
+        # 1. std、std均线、95分位
+        std_series = close_series.rolling(6).std()
+        ma_std_series = std_series.rolling(120).mean()
+
+        valid_std = std_series.dropna()
+        self.max_5_percentile = np.percentile(valid_std.values, 95) if len(valid_std) > 100 else 0
+
+        self.state_map.close_std = std_series.iloc[-1] if not std_series.empty else 0
+        self.latest_ma_std = ma_std_series.iloc[-1] if not ma_std_series.empty else 0
+        signal = self.max_5_percentile < std_series.iloc[-2] and std_series.iloc[-3] < std_series.iloc[-2] and std_series.iloc[-1] < std_series.iloc[-2]  #入场信号
+        if not signal :
+            return False
+        # 2. 检测最近一次std低于均值的位置
+        condition = std_series < ma_std_series
+        valid_index = condition[condition].index
+        start_idx = valid_index[-1]
+        self.iv_start_close = close_series.iloc[start_idx]
+        new_close = close_series.iloc[-1]
+        direction = 'rise' if new_close > self.iv_start_close else 'fall'
+        return direction
 
     #计算gamma、delta
     def calculate_option_greeks(self, option_code: str) -> tuple[float, float]:
@@ -134,7 +167,6 @@ class OptionsDemo1(BaseStrategy):
             instrument_id=self.params_map.instrument_id,
             style=self.params_map.kline_style
         )
-        
         #初始化
         self.kline_generator_option = KLineGenerator(
             real_time_callback=self.real_time_callback_option,
@@ -155,48 +187,36 @@ class OptionsDemo1(BaseStrategy):
         super().on_start()
     
     def on_stop(self) -> None:
-        self.output('策略暂停')
+        self.unsub_market_data()
         super().on_stop()
 
     def on_tick(self, tick: TickData) -> None:
         """收到行情 tick 推送"""
         #self.output(tick.instrument_id)
-        self.t = 1
         super().on_tick(tick)
         self.kline_generator_option.tick_to_kline(tick)
         self.kline_generator.tick_to_kline(tick)
         self.kline_generator_index.tick_to_kline(tick)
 
+    def on_order(self, order: OrderData) -> None:
+        self.output(f'合约代码：{order.instrument_id} 订单状态：{order.status}')
+        super.on_order(order)
+        
     def callback(self, kline: KLineData) -> None:
-        close_std_array = self.kline_generator.producer.std(timeperiod=6,array=True)
-        valid_array = close_std_array[~np.isnan(close_std_array)]
-
-        if valid_array.size > 100:
-            self.max_5_percentile = np.percentile(valid_array, 95)
-
-        valid_series = pd.Series(valid_array)
-        ma_std = valid_series.rolling(window=120).mean()  # 120期移动平均
-
-        # 3. 取最后一个作为副图指标（或整段用于画线）
-        self.latest_ma_std = ma_std.iloc[-1] if not ma_std.empty else 0.0
-        self.state_map.close_std = close_std_array[-1] if close_std_array.size > 0 else 0
-
-        if self.state_map.k == 0 and self.t == 1:
-            strike_rounded = int(math.floor(self.index_price / 100.0)-1) * 100 
-            ym_str = datetime.now().strftime('%y%m')
-            self.option_code = f"MO{ym_str}-P-{strike_rounded}"
-            self.state_map.k = 1
-            self.output('期权代码：',self.option_code)
-            #更新KLineGenerator类
-            self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code)#订阅行情
-            self.kline_generator_option = KLineGenerator(
-            real_time_callback=self.real_time_callback_option,
-            callback=self.callback_option,
-            exchange=self.params_map.exchange,
-            instrument_id=self.option_code,
-            style=self.params_map.kline_style)
-            
-            
+        if self.open_signal == False:
+            iv_signal = self.analyze_volatility_structure()
+            if self.trading: # 交易状态
+                self.open_signal = iv_signal
+        """接受 K 线回调"""
+        self.widget.recv_kline({
+            "kline": kline,
+            **self.main_indicator_data,
+            **self.sub_indicator_data
+        })
+        
+    def real_time_callback(self, kline: KLineData) -> None:
+        signal_price = 0
+        if self.open_signal == 'fall':
             #获取self.option_price当时价格，因为要出现价格抖动才会更新
             option_kline = self.market_center.get_kline_data(
                 exchange=self.params_map.exchange,
@@ -218,48 +238,47 @@ class OptionsDemo1(BaseStrategy):
                 )
             )
 
-        # 1. 获取当前网格目标仓位
-        futures_price = kline.close
-        key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - futures_price))
-        signal_price = 0
-        if key != self.key and self.state_map.k == 1:
-            self.key = key
-            self.output("期权价格:",self.option_price,"指数价格:",self.index_price)
-            delta,gamma = self.calculate_option_greeks(self.option_code)
-            
-            option_pos = self.get_position(self.option_code).net_position # 获取当前option净仓位
+            # 1. 获取当前网格目标仓位
+            futures_price = kline.close
+            key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - futures_price))
+            if key != self.key and self.state_map.k == 1:
+                self.key = key
+                self.output("期权价格:",self.option_price,"指数价格:",self.index_price)
+                delta,gamma = self.calculate_option_greeks(self.option_code)
+                
+                option_pos = self.get_position(self.option_code).net_position # 获取当前option净仓位
 
-            futures_delta = -delta*option_pos + 2*option_pos*gamma
-            futures_position = math.ceil(futures_delta / 2) 
+                futures_delta = -delta*option_pos + 2*option_pos*gamma
+                futures_position = math.ceil(futures_delta / 2) 
 
-            current_pos = self.get_position(self.params_map.instrument_id).net_position # 2. 获取当前futures净仓位
-            delta_position = futures_position - current_pos
-            
-            if delta_position > 0 and futures_price < target_price:
-                # 需要加仓
-                price = signal_price = kline.close + self.params_map.pay_up
-                self.order_ids.add(
-                    self.send_order(
-                        exchange=self.params_map.exchange,
-                        instrument_id=self.params_map.instrument_id,
-                        volume=delta_position,
-                        price=price,
-                        order_direction="buy"
+                current_pos = self.get_position(self.params_map.instrument_id).net_position # 2. 获取当前futures净仓位
+                delta_position = futures_position - current_pos
+                
+                if delta_position > 0 and futures_price < target_price:
+                    # 需要加仓
+                    price = signal_price = kline.close + self.params_map.pay_up
+                    self.order_ids.add(
+                        self.send_order(
+                            exchange=self.params_map.exchange,
+                            instrument_id=self.params_map.instrument_id,
+                            volume=delta_position,
+                            price=price,
+                            order_direction="buy"
+                        )
                     )
-                )
-            elif delta_position < 0 and futures_price > target_price:
-                # 需要减仓
-                price = kline.close - self.params_map.pay_up
-                signal_price = -price
-                self.order_ids.add(
-                    self.auto_close_position(
-                        exchange=self.params_map.exchange,
-                        instrument_id=self.params_map.instrument_id,
-                        volume=abs(delta_position),
-                        price=price,
-                        order_direction="sell"
+                elif delta_position < 0 and futures_price > target_price:
+                    # 需要减仓
+                    price = kline.close - self.params_map.pay_up
+                    signal_price = -price
+                    self.order_ids.add(
+                        self.auto_close_position(
+                            exchange=self.params_map.exchange,
+                            instrument_id=self.params_map.instrument_id,
+                            volume=abs(delta_position),
+                            price=price,
+                            order_direction="sell"
+                        )
                     )
-                )
 
         """接受 K 线回调"""
         self.widget.recv_kline({
@@ -268,6 +287,7 @@ class OptionsDemo1(BaseStrategy):
             **self.main_indicator_data,
             **self.sub_indicator_data
         })
+            
  
     def real_time_callback_option(self, kline: KLineData) -> None:
         """使用收到的实时推送 K 线来计算指标并更新线图"""
@@ -276,9 +296,6 @@ class OptionsDemo1(BaseStrategy):
     def real_time_callback_index(self, kline: KLineData) -> None:
         """使用收到的实时推送 K 线来计算指标并更新线图"""   
         self.callback_index(kline)
-
-    def real_time_callback(self, kline: KLineData) -> None:
-        self.callback(kline)
 
     def callback_index(self, kline: KLineData) -> None:
         self.index_price = kline.close
