@@ -119,7 +119,7 @@ class OptionsDemo(BaseStrategy):
             exchange="SSE",
             instrument_id="000852",
             style="M1",
-            count=-1)
+            count=-2)
         self.index_price = kline[-1]['close']
 
         self.kline_generator = KLineGenerator(
@@ -185,7 +185,7 @@ class OptionsDemo(BaseStrategy):
                 exchange=self.params_map.exchange,
                 instrument_id=self.option_code,
                 style="M1",
-                count=-1)
+                count=-2)
             
             self.option_price = option_kline[-1]['close']
             price = self.option_price + self.params_map.pay_up
