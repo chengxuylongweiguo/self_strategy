@@ -1,4 +1,4 @@
-from WindPy import w
-w.start()
-a = w.wsi("000852.SH", "close", "2025-07-08 14:00:50", "2025-07-08 14:00:50", "Fill=Previous")
-print(a)
+import telebot
+TOKEN = "7738302353:AAGdFjWI6Wg6ye8eFHnvH7N6zRKarlHUZPY"
+bot = telebot.TeleBot(TOKEN)
+bot.send_message(5436165313, f'你好')
