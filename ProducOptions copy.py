@@ -20,11 +20,9 @@ class Params(BaseParams):
     signal_manual: str = Field(default="False", title="手动触发")
     iv_strat: float = Field(default=0, title="信号开始价格")
     quantile: int = Field(default=95, title="信号分位数阈值")
-    middle_value: float = Field(default=0.0, title="网格中间值", ge=1)
-    max_value: float = Field(default=0.0, title="网格值", ge=1)
+    ym_str: str = Field(default="2508", title="到期月份")
     steps: int = Field(default=12, title="网格层数", ge=1)
     pay_up: float = Field(default=0.2, title="滑价超价")
-    ym_str: str = Field(default="2508", title="到期月份")
     kline_style: KLineStyleType = Field(default="M5", title="K线周期")
     
 
@@ -233,7 +231,7 @@ class ProducOptions(BaseStrategy):
                     iv_signal = False
             
             #暴跌信号处理
-            if iv_signal == 'fall' and self.trading:
+            if iv_signal == 'fall':
                 self.output(self.open_signal)
                 #获取对应的看跌期权
                 otm_strike_rounded = int(math.floor(kline.close / 100.0)-1) * 100 
@@ -281,7 +279,7 @@ class ProducOptions(BaseStrategy):
                 self.open_signal = iv_signal #更新状态 防止重复触发入场
 
             #暴涨信号处理
-            if iv_signal == 'rise' and self.trading:
+            if iv_signal == 'rise':
                 #获取对应的看涨期权
                 self.output(self.open_signal)
                 otm_strike_rounded = int(math.ceil(self.index_price / 100.0) + 1) * 100 
@@ -328,11 +326,6 @@ class ProducOptions(BaseStrategy):
                     )
                 )
                 self.open_signal = iv_signal #更新状态 防止重复触发入场
-
-        elif self.params_map.max_value != 0 and self.params_map.middle_value != 0:
-            self.min_value = self.params_map.max_value #不一定是最小值，可能是最大值 下面同理但不影响网格生成
-            self.max_value = self.params_map.middle_value 
-            self.rules = self.main_indicator_data
 
         """接受 K 线回调"""
         self.widget.recv_kline({
