@@ -275,7 +275,7 @@ class ProducOptions(BaseStrategy):
                         volume=10,
                         price=price,
                         order_type='FAK',
-                        market=True,
+                        market=False,
                         order_direction="buy"
                     )
                 )
@@ -326,7 +326,7 @@ class ProducOptions(BaseStrategy):
                         volume=10,
                         price=price,
                         order_type='FAK',
-                        market=True,
+                        market=False,
                         order_direction="sell"
                     )
                 )
