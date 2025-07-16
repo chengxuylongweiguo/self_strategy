@@ -2,6 +2,7 @@ from datetime import datetime
 import time
 import pandas as pd
 import math
+import re
 from typing import Union
 import numpy as np
 from pythongo.base import BaseParams, BaseState, Field
@@ -14,11 +15,16 @@ from pythongo.option import Option
 class Params(BaseParams):
     """参数设置"""
     exchange: str = Field(default="CFFEX", title="交易所")
-    instrument_id: str = Field(default="IM2507", title="合约代码")
-    ym_str: str = Field(default="2508", title="到期月份")
-    quantile: int = Field(default=80, title="信号分位数阈值")
-    steps: int = Field(default=6, title="网格层数", ge=1)
+    instrument_id: str = Field(default="IM2508", title="合约代码")
+    signal_manual: str = Field(default="False", title="手动触发")
+    iv_strat: float = Field(default=0.0, title="波动起始价格")
+    quantile: int = Field(default=95, title="信号分位数阈值")
+    middle_value: float = Field(default=0.0, title="网格中间值", ge=0)
+    max_value: float = Field(default=0.0, title="网格值", ge=0)
+    steps: int = Field(default=12, title="网格层数", ge=1)
     pay_up: float = Field(default=0.2, title="滑价超价")
+    order_type: str = Field(default="GFD", title="下单类型")
+    ym_str: str = Field(default="2508", title="到期月份")
     kline_style: KLineStyleType = Field(default="M5", title="K线周期")
     
 
@@ -27,7 +33,7 @@ class State(BaseState):
     close_std: float = Field(default=0, title="标准差")
     k: int = Field(default=0, title="状态")
 
-class OptionsDemo2(BaseStrategy):
+class IndexFutures(BaseStrategy):
     def __init__(self) -> None:
         super().__init__()
         self.market_center = MarketCenter()
@@ -37,10 +43,8 @@ class OptionsDemo2(BaseStrategy):
         self.index_price: float = 0.0
         self.option_price: float = 0.0
         self.futures_price: float = 6000.0
-        self.atm_option_price: float = 0.0
-        self.Transaction: int = 0
         self.option_code: str 
-        self.atm_option_code: str 
+        self.order_index: bool = False #防止重复下单
         self.open_signal: Union[bool, str] = False
         self.rules: dict = {}
         self.iv_start_close = 0 #波动开始的价格
@@ -74,7 +78,6 @@ class OptionsDemo2(BaseStrategy):
             "std_ma":self.latest_ma_std,
         }
 
- 
     #进场信号 待修改已写死 记录波动开始价格
     def analyze_volatility_structure(self):
         """
@@ -136,9 +139,7 @@ class OptionsDemo2(BaseStrategy):
         r = 0.015  # 默认无风险利率
         
         #输出行权价
-        parts = option_code.split('-')
-        strike_price = ''.join(filter(str.isdigit, parts[-1]))
-        strike_price = float(strike_price)
+        strike_price = int(''.join(re.findall(r'\d+', option_code))[4:])
         #输出期权类型
         option_type = "CALL" if "-C-" in option_code else ("PUT" if "-P-" in option_code else None)
         # 创建 Option 实例并计算希腊值
@@ -156,7 +157,6 @@ class OptionsDemo2(BaseStrategy):
         return delta, gamma
 
     def on_start(self) -> None:
-
         self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.params_map.instrument_id)#订阅行情
         self.sub_market_data(exchange='SSE',instrument_id='000852')#订阅行情
 
@@ -192,11 +192,10 @@ class OptionsDemo2(BaseStrategy):
         self.kline_generator_index.tick_to_kline(tick)
         if self.open_signal != False: #当出现信号的时候才接受tick
             self.kline_generator_option.tick_to_kline(tick)
-            self.kline_generator_atm_option.tick_to_kline(tick)
 
     #报单回调
     def on_order(self, order: OrderData) -> None:
-        self.output(f'合约代码：{order.instrument_id} 订单状态：{order.status} 成交数量：{order.traded_volume}')
+        self.output(f'合约代码：{order.instrument_id} 订单状态：{order.status} 成交数量：{order.traded_volume} 报单价格：{order.price}')
         super().on_order(order)
         
     def callback(self, kline: KLineData) -> None:
@@ -205,9 +204,11 @@ class OptionsDemo2(BaseStrategy):
         if self.open_signal == False:
             iv_signal = self.analyze_volatility_structure()
             if self.trading: # 实时交易状态
+                if (self.params_map.signal_manual == 'rise' or self.params_map.signal_manual == 'fall') and self.params_map.iv_strat != 0:
+                    iv_signal = self.params_map.signal_manual #手动设置信号
+                    self.iv_start_close = self.params_map.iv_strat #手动设置波动开始时的行情
                 self.output(iv_signal)
                 if iv_signal == 'fall' or iv_signal == 'rise':
-                    self.iv_start_close = 6440
                     new_price = kline.close
                     middle_close = (self.iv_start_close + new_price) / 2 #中点价格
                     self.min_value = 2*kline.close - middle_close #不一定是最小值，可能是最大值 下面同理但不影响网格生成
@@ -226,12 +227,9 @@ class OptionsDemo2(BaseStrategy):
                 self.output(self.open_signal)
                 #获取对应的看跌期权
                 otm_strike_rounded = int(math.floor(self.index_price / 100.0)-1) * 100 
-                atm_strike_rounded = int(round(self.index_price / 100.0)) * 100
-
                 ym_str = self.params_map.ym_str
                 self.option_code = f"MO{ym_str}-P-{otm_strike_rounded}"
-                self.atm_option_code = f"MO{ym_str}-P-{atm_strike_rounded}"
-
+                
                 self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
                 self.kline_generator_option = KLineGenerator(
                 real_time_callback=self.real_time_callback_option,
@@ -240,43 +238,37 @@ class OptionsDemo2(BaseStrategy):
                 instrument_id=self.option_code,
                 style='M1')
 
-                self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.atm_option_code) #订阅平值行情
-                self.kline_generator_atm_option = KLineGenerator(
-                real_time_callback=self.real_time_callback_option,
-                callback=self.callback_option,
-                exchange=self.params_map.exchange,
-                instrument_id=self.atm_option_code,
-                style='M1')
                 #推送历史 K 线数据到回调
                 self.kline_generator_option.push_history_data()
-                self.kline_generator_atm_option.push_history_data()
-
-                time.sleep(3) #等价格更新
-                #self.option_price = option_kline[-1]['close']
-                #self.atm_option_price = atm_option_kline[-1]['close']
-                self.output('虚值期权：',self.option_code,' 平值期权：',self.atm_option_code)
-                price = kline.close + self.params_map.pay_up
+                self.open_signal = iv_signal #更新状态 防止重复触发入场
+                signal_price = kline.close
+                self.output('虚值期权：',self.option_code)
+                
+                #买入期权
+                future_pos = 10
+                delta,gamma = self.calculate_option_greeks(self.option_code)
+                option_pos = future_pos*2 / (-delta + 2*gamma)
+                option_pos = math.ceil(option_pos) 
+                price = self.option_price*1.1
                 self.order_ids.add(
                     self.send_order(
                         exchange=self.params_map.exchange,
-                        instrument_id=self.params_map.instrument_id,
-                        volume=10,
+                        instrument_id=self.option_code,
+                        volume=option_pos,
                         price=price,
-                        market=True,
+                        market=False,
                         order_direction="buy"
                     )
                 )
-                self.open_signal = iv_signal #更新状态 防止重复触发入场
-
+                time.sleep(3) #等价格更新
+                
             #暴涨信号处理
             if iv_signal == 'rise':
                 #获取对应的看涨期权
                 self.output(self.open_signal)
                 otm_strike_rounded = int(math.ceil(self.index_price / 100.0) + 1) * 100 
-                atm_strike_rounded = int(round(self.index_price / 100.0)) * 100 
                 ym_str = self.params_map.ym_str
                 self.option_code = f"MO{ym_str}-C-{otm_strike_rounded}" 
-                self.atm_option_code = f"MO{ym_str}-C-{atm_strike_rounded}"
                 
                 #订阅行情
                 self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
@@ -287,34 +279,34 @@ class OptionsDemo2(BaseStrategy):
                 instrument_id=self.option_code,
                 style='M1')
                 
-                self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.atm_option_code) #订阅平值行情
-                self.kline_generator_atm_option = KLineGenerator(
-                real_time_callback=self.real_time_callback_option,
-                callback=self.callback_option,
-                exchange=self.params_map.exchange,
-                instrument_id=self.atm_option_code,
-                style='M1')
                 #推送历史 K 线数据到回调
                 self.kline_generator_option.push_history_data()
-                self.kline_generator_atm_option.push_history_data()
-
-                time.sleep(3) #等价格更新
-                #self.option_price = option_kline[-1]['close']
-                #self.atm_option_price = atm_option_kline[-1]['close']
-                self.output('虚值期权：',self.option_code,' 平值期权：',self.atm_option_code)
-                price = kline.close + self.params_map.pay_up
-                self.output(price)
+                self.open_signal = iv_signal #更新状态 防止重复触发入
+                signal_price = kline.close
+                self.output('虚值期权：',self.option_code)
+                
+                future_pos = 10
+                delta,gamma = self.calculate_option_greeks(self.option_code)
+                option_pos = future_pos*2 / (delta + 2*gamma)
+                option_pos = math.ceil(option_pos)
+                price = self.option_price*1.1
                 self.order_ids.add(
                     self.send_order(
                         exchange=self.params_map.exchange,
-                        instrument_id=self.params_map.instrument_id,
-                        volume=10,
+                        instrument_id=self.option_code,
+                        volume=option_pos,
                         price=price,
-                        market=True,
-                        order_direction="sell"
+                        market=False,
+                        order_direction="buy"
                     )
                 )
-                self.open_signal = iv_signal #更新状态 防止重复触发入场
+                time.sleep(3) #等价格更新
+        
+        #调节网格
+        elif self.params_map.max_value != 0 and self.params_map.middle_value != 0:
+            self.min_value = self.params_map.max_value #不一定是最小值，可能是最大值 下面同理但不影响网格生成
+            self.max_value = self.params_map.middle_value 
+            self.rules = self.main_indicator_data
 
         """接受 K 线回调"""
         self.widget.recv_kline({
@@ -326,6 +318,7 @@ class OptionsDemo2(BaseStrategy):
         
     def real_time_callback(self, kline: KLineData) -> None:
         #更新副图指标值
+        self.futures_price = kline.close
         close_array = self.kline_generator.producer.close
         close_series = pd.Series(close_array)
         std_series = close_series.rolling(6).std()
@@ -336,87 +329,123 @@ class OptionsDemo2(BaseStrategy):
         self.latest_ma_std = ma_std_series.iloc[-1] if not ma_std_series.empty else 0
         
         signal_price = 0 #初始化买卖图像信号
-        if self.open_signal == 'fall' and self.get_position(self.params_map.instrument_id).net_position != 0:
-            futures_price = kline.close
-            key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - futures_price))
-            if key != self.key:
-                self.key = key #更新网格状态
-                delta,gamma = self.calculate_option_greeks(self.option_code)
-                
-                future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                option_pos = future_pos*2 / (-delta + 4*gamma)
-                option_pos = math.ceil(option_pos) 
-
-                current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
-                delta_position = option_pos - current_pos
-                self.output("期权价格:",self.option_price,"指数价格:",self.index_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
-                if delta_position > 0 and futures_price > target_price: #需要加仓 要满足价格小于网格价格
-                    price = signal_price = kline.close + self.params_map.pay_up
-                    self.order_ids.add(
-                        self.send_order(
-                            exchange=self.params_map.exchange,
-                            instrument_id=self.option_code,
-                            volume=delta_position,
-                            price=price,
-                            market=True,
-                            order_direction="buy"
-                        )
+        if self.open_signal == 'fall' and self.get_position(self.option_code).net_position != 0:
+            if self.get_position(self.params_map.instrument_id).net_position == 0 and self.order_index == False: #在已经买进期权的情况下才买入期货因为期货流动性好
+                signal_price = self.futures_price
+                price = self.futures_price*1.1
+                self.order_ids.add(
+                    self.send_order(
+                        exchange=self.params_map.exchange,
+                        instrument_id=self.params_map.instrument_id,
+                        volume=10,
+                        price=price,
+                        market=False,
+                        order_direction="buy"
                     )
+                )
+                self.order_index = True
 
-                elif delta_position < 0 and futures_price < target_price: # 需要减仓 要满足价格大于网格价格
-                    price = kline.close - self.params_map.pay_up
-                    signal_price = -price
-                    self.order_ids.add(
-                        self.auto_close_position(
-                            exchange=self.params_map.exchange,
-                            instrument_id=self.option_code,
-                            volume=abs(delta_position),
-                            price=price,
-                            market=True,
-                            order_direction="sell"
+            else: #已经持有期货就进行期权的调仓
+                key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - self.futures_price))
+                if key != self.key:
+                    self.key = key #更新网格状态
+                    delta,gamma = self.calculate_option_greeks(self.option_code)
+                    
+                    future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
+                    option_pos = int(future_pos*2 / (-delta + 2*gamma))
+                    #option_pos = math.ceil(option_pos) 
+
+                    current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
+                    delta_position = option_pos - current_pos
+                    
+                    if delta_position > 0 and self.futures_price > target_price: #需要加仓 要满足价格小于网格价格
+                        self.output("期权价格:",self.option_price,"指数价格:",self.index_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
+                        price =  self.option_price * 1.1
+                        signal_price = self.futures_price
+                        self.order_ids.add(
+                            self.send_order(
+                                exchange=self.params_map.exchange,
+                                instrument_id=self.option_code,
+                                volume=delta_position,
+                                price=price,
+                                market=False,
+                                order_direction="buy"
+                            )
                         )
-                    )
 
-        if self.open_signal == 'rise' and self.get_position(self.params_map.instrument_id).net_position != 0:
-            futures_price = kline.close
-            key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - futures_price))
-            if key != self.key:
-                self.key = key #更新网格状态
-                delta,gamma = self.calculate_option_greeks(self.option_code)
-
-                future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                option_pos = future_pos*2 / (delta + 4*gamma)
-                option_pos = math.ceil(option_pos) 
-
-                current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
-                delta_position = option_pos - current_pos
-                self.output("期权价格:",self.option_price,"指数价格:",self.index_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
-                if delta_position > 0 and futures_price < target_price: #需要加仓 要满足价格小于网格价格
-                    price = signal_price = kline.close + self.params_map.pay_up
-                    self.order_ids.add(
-                        self.send_order(
-                            exchange=self.params_map.exchange,
-                            instrument_id=self.option_code,
-                            volume=delta_position,
-                            price=price,
-                            market=True,
-                            order_direction="buy"
+                    elif delta_position < 0 and self.futures_price < target_price: # 需要减仓 要满足价格大于网格价格
+                        self.output("期权价格:",self.option_price,"指数价格:",self.index_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
+                        price = self.option_price*0.9
+                        signal_price = -self.futures_price
+                        self.order_ids.add(
+                            self.auto_close_position(
+                                exchange=self.params_map.exchange,
+                                instrument_id=self.option_code,
+                                volume=abs(delta_position),
+                                price=price,
+                                market=False,
+                                order_direction="sell"
+                            )
                         )
+
+        if self.open_signal == 'rise' and self.get_position(self.option_code).net_position != 0:
+            if self.get_position(self.params_map.instrument_id).net_position == 0 and self.order_index == False: #在已经买进期权的情况下才买入期货因为期货流动性好
+                price = self.futures_price*0.9
+                signal_price = -self.futures_price
+                self.order_ids.add(
+                    self.send_order(
+                        exchange=self.params_map.exchange,
+                        instrument_id=self.params_map.instrument_id,
+                        volume=10,
+                        price=price,
+                        market=False,
+                        order_direction="sell"
                     )
-                
-                elif delta_position < 0 and futures_price > target_price: # 需要减仓 要满足价格大于网格价格
-                    price = kline.close - self.params_map.pay_up
-                    signal_price = -price
-                    self.order_ids.add(
-                        self.auto_close_position(
-                            exchange=self.params_map.exchange,
-                            instrument_id=self.option_code,
-                            volume=abs(delta_position),
-                            price=price,
-                            market=True,
-                            order_direction="sell"
+                )
+                self.order_index = True
+            
+            else:
+                key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - self.futures_price))
+                if key != self.key:
+                    self.key = key #更新网格状态
+                    delta,gamma = self.calculate_option_greeks(self.option_code)
+
+                    future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
+                    option_pos = int(future_pos*2 / (delta + 2*gamma))
+                    #option_pos = math.ceil(option_pos) 
+
+                    current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
+                    delta_position = option_pos - current_pos
+                    
+                    if delta_position > 0 and self.futures_price < target_price: #需要加仓 要满足价格小于网格价格
+                        self.output("期权价格:",self.option_price,"指数价格:",self.index_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
+                        price =  self.option_price*1.1
+                        signal_price = self.futures_price
+                        self.order_ids.add(
+                            self.send_order(
+                                exchange=self.params_map.exchange,
+                                instrument_id=self.option_code,
+                                volume=delta_position,
+                                price=price,
+                                market=False,
+                                order_direction="buy"
+                            )
                         )
-                    )
+                    
+                    elif delta_position < 0 and self.futures_price > target_price: # 需要减仓 要满足价格大于网格价格
+                        self.output("期权价格:",self.option_price,"指数价格:",self.index_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
+                        price = self.option_price*0.9
+                        signal_price = -self.futures_price
+                        self.order_ids.add(
+                            self.auto_close_position(
+                                exchange=self.params_map.exchange,
+                                instrument_id=self.option_code,
+                                volume=abs(delta_position),
+                                price=price,
+                                market=False,
+                                order_direction="sell"
+                            )
+                        )
 
         """接受 K 线回调"""
         self.widget.recv_kline({
@@ -431,10 +460,7 @@ class OptionsDemo2(BaseStrategy):
         self.callback_option(kline)
     
     def callback_option(self, kline: KLineData) -> None:
-        if kline.instrument_id == self.option_code:
-            self.option_price = kline.close
-        elif kline.instrument_id == self.atm_option_code:
-            self.atm_option_price = kline.close
+        self.option_price = kline.close
         #self.output(' 期权价格：',self.option_price)
 
     def real_time_callback_index(self, kline: KLineData) -> None:
