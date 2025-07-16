@@ -45,8 +45,8 @@ class CommodityFutures(BaseStrategy):
         self.order_ids: set[int] = set() #
         self.option_price: float = 0.0 #期权价格
         self.futures_price: float = 0.0#用于初始化网格
-        self.option_code: str #期权代码
-        self.index_code: str #当月期货代码
+        self.option_code: str = "option"#期权代码
+        self.index_code: str = "option"#当月期货代码
         self.index_price: float #当月期货价格
         self.open_signal: Union[bool, str] = False #开仓信号
         self.order_futures: bool = False #期货是否下单
@@ -147,6 +147,8 @@ class CommodityFutures(BaseStrategy):
             exchange=self.params_map.exchange,
             instrument_id=option_code
         ).expire_date
+        if not expire_str:
+            raise ValueError("expire_str 为空，无法解析期权到期日")
         expire_date = datetime.strptime(expire_str, "%Y%m%d").date()
         
         # 当前日期和剩余到期时间（年化）
@@ -191,13 +193,13 @@ class CommodityFutures(BaseStrategy):
         """收到行情 tick 推送"""
         #self.output(tick.instrument_id)
         super().on_tick(tick)
-        self.kline_generator.tick_to_kline(tick)
-        if tick.instrument_id == self.option_code and tick.last_price != 0: #当出现信号的时候才接受tick
-            self.option_price = tick.last_price #更新期权价格
-            self.output(tick.instrument_id,':',tick.last_price)
-        elif tick.instrument_id == self.index_code and tick.last_price != 0:
-            self.index_price = tick.last_price  #更新当月期货价格
-            self.output(tick.instrument_id,':',tick.last_price)
+        if tick.last_price != 0:
+            self.kline_generator.tick_to_kline(tick)
+            if tick.instrument_id == self.option_code and tick.last_price != 0: #当出现信号的时候才接受tick
+                self.option_price = tick.last_price #更新期权价格
+                self.output(tick.instrument_id,':',tick.last_price)
+            elif tick.instrument_id == self.index_code and tick.last_price != 0:
+                self.index_price = tick.last_price  #更新当月期货价格
 
     #报单回调
     def on_order(self, order: OrderData) -> None:
@@ -284,7 +286,7 @@ class CommodityFutures(BaseStrategy):
                     signal_price = self.futures_price
 
                     future_pos = 10
-                    delta,gamma = self.calculate_option_greeks(self.option_code)
+                    delta,gamma = self.calculate_option_greeks(self.option_code,self.futures_price,'CALL')
                     option_pos = future_pos*2 / (delta + 2*gamma)
                     option_pos = math.ceil(option_pos)
                     price = self.option_price*1.1
@@ -392,7 +394,7 @@ class CommodityFutures(BaseStrategy):
         if self.open_signal == 'rise' and self.get_position(self.option_code).net_position != 0:
             if self.get_position(self.params_map.instrument_id).net_position == 0 and self.order_futures == False: #在已经买进期权的情况下才买入期货因为期货流动性好
                 signal_price = self.futures_price
-                price = self.futures_price*1.1
+                price = self.futures_price*0.9
                 self.order_ids.add(
                     self.send_order(
                         exchange=self.params_map.exchange,
@@ -400,7 +402,7 @@ class CommodityFutures(BaseStrategy):
                         volume=10,
                         price=price,
                         market=False,
-                        order_direction="buy"
+                        order_direction="sell"
                     )
                 )
                 self.order_futures = True
