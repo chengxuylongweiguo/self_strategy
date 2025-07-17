@@ -247,7 +247,7 @@ class IndexFutures(BaseStrategy):
                 #买入期权
                 future_pos = 10
                 delta,gamma = self.calculate_option_greeks(self.option_code)
-                option_pos = future_pos*2 / (-delta + 2*gamma)
+                option_pos = future_pos*2 / (-delta + 8*gamma)
                 option_pos = math.ceil(option_pos) 
                 price = self.option_price*1.1
                 self.order_ids.add(
@@ -287,7 +287,7 @@ class IndexFutures(BaseStrategy):
                 
                 future_pos = 10
                 delta,gamma = self.calculate_option_greeks(self.option_code)
-                option_pos = future_pos*2 / (delta + 2*gamma)
+                option_pos = future_pos*2 / (delta + 8*gamma)
                 option_pos = math.ceil(option_pos)
                 price = self.option_price*1.1
                 self.order_ids.add(
@@ -307,18 +307,8 @@ class IndexFutures(BaseStrategy):
             self.min_value = self.params_map.max_value #不一定是最小值，可能是最大值 下面同理但不影响网格生成
             self.max_value = self.params_map.middle_value 
             self.rules = self.main_indicator_data
-
-        """接受 K 线回调"""
-        self.widget.recv_kline({
-            "kline": kline,
-            "signal_price": signal_price,
-            **self.main_indicator_data,
-            **self.sub_indicator_data
-        })
         
-    def real_time_callback(self, kline: KLineData) -> None:
         #更新副图指标值
-        self.futures_price = kline.close
         close_array = self.kline_generator.producer.close
         close_series = pd.Series(close_array)
         std_series = close_series.rolling(6).std()
@@ -327,7 +317,18 @@ class IndexFutures(BaseStrategy):
         self.max_5_percentile = np.percentile(valid_std.values, self.params_map.quantile) if len(valid_std) > 100 else 0
         self.state_map.close_std = std_series.iloc[-1] if not std_series.empty else 0
         self.latest_ma_std = ma_std_series.iloc[-1] if not ma_std_series.empty else 0
-        
+
+
+        """接受 K 线回调"""
+        self.widget.recv_kline({
+            "kline": kline,
+            "signal_price": signal_price,
+            **self.main_indicator_data,
+            **self.sub_indicator_data
+        })
+
+    def real_time_callback(self, kline: KLineData) -> None:
+        self.futures_price = kline.close
         signal_price = 0 #初始化买卖图像信号
         if self.open_signal == 'fall' and self.get_position(self.option_code).net_position != 0:
             if self.get_position(self.params_map.instrument_id).net_position == 0 and self.order_index == False: #在已经买进期权的情况下才买入期货因为期货流动性好
@@ -352,7 +353,7 @@ class IndexFutures(BaseStrategy):
                     delta,gamma = self.calculate_option_greeks(self.option_code)
                     
                     future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                    option_pos = int(future_pos*2 / (-delta + 2*gamma))
+                    option_pos = int(future_pos*2 / (-delta + 8*gamma))
                     #option_pos = math.ceil(option_pos) 
 
                     current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
@@ -411,7 +412,7 @@ class IndexFutures(BaseStrategy):
                     delta,gamma = self.calculate_option_greeks(self.option_code)
 
                     future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                    option_pos = int(future_pos*2 / (delta + 2*gamma))
+                    option_pos = int(-future_pos*2 / (delta + 8*gamma))
                     #option_pos = math.ceil(option_pos) 
 
                     current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
@@ -446,7 +447,7 @@ class IndexFutures(BaseStrategy):
                                 order_direction="sell"
                             )
                         )
-
+        
         """接受 K 线回调"""
         self.widget.recv_kline({
             "kline": kline,

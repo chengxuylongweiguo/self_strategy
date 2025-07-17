@@ -97,6 +97,31 @@ class CommodityFutures(BaseStrategy):
         bot = telebot.TeleBot(TOKEN, request_session=session)
         # 测试发送消息
         bot.send_message(chat_id=5436165313, text=text) """
+    
+    #生成期权代码
+    def get_option_code(self,index_code,option_type,strike_rounded):
+        """ 依次输入标的首字母，期权类型，行权价 """
+        code = re.match(r'^[A-Za-z]+', index_code).group()
+        ym_str = self.params_map.ym_str
+        if self.params_map.exchange == "SHFE":#上期所
+            option_code = f"{code}{ym_str}{option_type}{strike_rounded}"
+            return option_code
+        elif self.params_map.exchange == "CZCE":#郑商所
+            ym_str = ym_str[1:]
+            option_code = f"{code}{ym_str}{option_type}{strike_rounded}"
+            return option_code
+        elif self.params_map.exchange == "DCE":#大商所
+            option_code = f"{code}{ym_str}-{option_type}-{strike_rounded}"
+            return option_code
+        elif self.params_map.exchange == "GFEX":#广期所
+            option_code = f"{code}{ym_str}-{option_type}-{strike_rounded}"
+            return option_code
+        elif self.params_map.exchange == "INE":#能源中心
+            option_code = f"{code}{ym_str}{option_type}{strike_rounded}"
+            return option_code
+        else:
+            raise ValueError("交易所输入错误！") 
+
 
     #进场信号 
     def analyze_volatility_structure(self):
@@ -197,7 +222,7 @@ class CommodityFutures(BaseStrategy):
             self.kline_generator.tick_to_kline(tick)
             if tick.instrument_id == self.option_code and tick.last_price != 0: #当出现信号的时候才接受tick
                 self.option_price = tick.last_price #更新期权价格
-                self.output(tick.instrument_id,':',tick.last_price)
+    
             elif tick.instrument_id == self.index_code and tick.last_price != 0:
                 self.index_price = tick.last_price  #更新当月期货价格
 
@@ -232,20 +257,20 @@ class CommodityFutures(BaseStrategy):
                     #选择期权
                     code = re.match(r'^[A-Za-z]+', self.params_map.instrument_id).group()
                     ym_str = self.params_map.ym_str
-                    self.option_code = f"{code}{ym_str}P{otm_strike_rounded}"
                     self.index_code = f'{code}{ym_str}'
+
                     self.output(self.open_signal,'-',self.option_code,'-',self.futures_price,'-',self.index_code)
 
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
                     kline_data = self.market_center.get_kline_data(exchange=self.params_map.exchange,
                         instrument_id=self.option_code,
-                        count=-3)
+                        count=-50)
                     self.option_price = kline_data[-1]['close']
 
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.index_code) #订阅当月期货行情用于计算gamma
                     kline_data = self.market_center.get_kline_data(exchange=self.params_map.exchange,
                         instrument_id=self.index_code,
-                        count=-3)
+                        count=-50)
                     self.index_price = kline_data[-1]['close']
                     #推送历史 K 线数据到回调
                     self.open_signal = iv_signal #更新状态 防止重复触发入场
@@ -254,7 +279,7 @@ class CommodityFutures(BaseStrategy):
                     #买入期权
                     future_pos = 10
                     delta,gamma = self.calculate_option_greeks(self.option_code,self.futures_price,'PUT')
-                    option_pos = future_pos*2 / (-delta + 2*gamma)
+                    option_pos = future_pos*2 / (-delta + 8*gamma)
                     option_pos = math.ceil(option_pos) 
                     price = self.option_price*1.1
                     self.order_ids.add(
@@ -273,7 +298,7 @@ class CommodityFutures(BaseStrategy):
                 elif iv_signal == 'rise':
                     #获取对应的看涨期权
                     strike_interval = self.params_map.strike_interval
-                    otm_strike_rounded = int(math.ceil(self.futures_price / strike_interval) + 1) * strike_interval 
+                    otm_strike_rounded = int((math.ceil(self.futures_price / strike_interval) + 1) * strike_interval) 
                     code = re.match(r'^[A-Za-z]+', self.params_map.instrument_id).group()
                     ym_str = self.params_map.ym_str 
                     self.option_code = f"{code}{ym_str}C{otm_strike_rounded}" 
@@ -281,15 +306,25 @@ class CommodityFutures(BaseStrategy):
                     self.output(self.open_signal,'-',self.option_code,'-',self.futures_price,'-',self.index_code)
 
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
+                    kline_data = self.market_center.get_kline_data(exchange=self.params_map.exchange,
+                        instrument_id=self.option_code,
+                        count=-50)
+                    self.option_price = kline_data[-1]['close']
+
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.index_code) #订阅当月期货行情用于计算gamma
+                    kline_data = self.market_center.get_kline_data(exchange=self.params_map.exchange,
+                        instrument_id=self.index_code,
+                        count=-50)
+                    self.index_price = kline_data[-1]['close']                    
                     self.open_signal = iv_signal #更新状态 防止重复触发入场
                     signal_price = self.futures_price
 
                     future_pos = 10
                     delta,gamma = self.calculate_option_greeks(self.option_code,self.futures_price,'CALL')
-                    option_pos = future_pos*2 / (delta + 2*gamma)
+                    option_pos = future_pos*2 / (delta + 8*gamma)
                     option_pos = math.ceil(option_pos)
                     price = self.option_price*1.1
+                    self.output('期权代码：',self.option_code,'买入数量：',option_pos,'买入价格：',price)
                     self.order_ids.add(
                         self.send_order(
                             exchange=self.params_map.exchange,
@@ -313,6 +348,16 @@ class CommodityFutures(BaseStrategy):
             self.min_value = self.params_map.max_value #不一定是最小值，可能是最大值 下面同理但不影响网格生成
             self.max_value = self.params_map.middle_value 
             self.rules = self.main_indicator_data
+        
+        #更新副图指标值
+        close_array = self.kline_generator.producer.close
+        close_series = pd.Series(close_array)
+        std_series = close_series.rolling(6).std()
+        ma_std_series = std_series.rolling(120).mean()
+        valid_std = std_series.dropna()
+        self.max_5_percentile = np.percentile(valid_std.values, self.params_map.quantile ) if len(valid_std) > 100 else 0
+        self.state_map.close_std = std_series.iloc[-1] if not std_series.empty else 0
+        self.latest_ma_std = ma_std_series.iloc[-1] if not ma_std_series.empty else 0
 
         """接受 K 线回调"""
         self.widget.recv_kline({
@@ -324,16 +369,6 @@ class CommodityFutures(BaseStrategy):
         
     def real_time_callback(self, kline: KLineData) -> None:
         self.futures_price = kline.close
-        #更新副图指标值
-        close_array = self.kline_generator.producer.close
-        close_series = pd.Series(close_array)
-        std_series = close_series.rolling(6).std()
-        ma_std_series = std_series.rolling(120).mean()
-        valid_std = std_series.dropna()
-        self.max_5_percentile = np.percentile(valid_std.values, self.params_map.quantile ) if len(valid_std) > 100 else 0
-        self.state_map.close_std = std_series.iloc[-1] if not std_series.empty else 0
-        self.latest_ma_std = ma_std_series.iloc[-1] if not ma_std_series.empty else 0
-        
         signal_price = 0 #初始化买卖图像信号
         if self.open_signal == 'fall' and self.get_position(self.option_code).net_position != 0:
             if self.get_position(self.params_map.instrument_id).net_position == 0 and self.order_futures == False: #在已经买进期权的情况下才买入期货因为期货流动性好
@@ -414,7 +449,7 @@ class CommodityFutures(BaseStrategy):
                     delta,gamma = self.calculate_option_greeks(self.option_code,self.futures_price,'CALL')
 
                     future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                    option_pos = future_pos*2 / (delta + 4*gamma)
+                    option_pos = -future_pos*2 / (delta + 4*gamma)
                     option_pos = math.ceil(option_pos) 
 
                     current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
@@ -447,7 +482,7 @@ class CommodityFutures(BaseStrategy):
                                 order_direction="sell"
                             )
                         )
-
+        
         """接受 K 线回调"""
         self.widget.recv_kline({
             "kline": kline,
