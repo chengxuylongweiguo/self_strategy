@@ -108,7 +108,7 @@ class CommodityFutures(BaseStrategy):
             return option_code
         elif self.params_map.exchange == "CZCE":#郑商所
             ym_str = ym_str[1:]
-            option_code = f"{code}{ym_str}{option_type}{strike_rounded}"
+            option_code = f"{code}{ym_str[1:]}{option_type}{strike_rounded}"
             return option_code
         elif self.params_map.exchange == "DCE":#大商所
             option_code = f"{code}{ym_str}-{option_type}-{strike_rounded}"
@@ -121,7 +121,6 @@ class CommodityFutures(BaseStrategy):
             return option_code
         else:
             raise ValueError("交易所输入错误！") 
-
 
     #进场信号 
     def analyze_volatility_structure(self):
@@ -258,7 +257,7 @@ class CommodityFutures(BaseStrategy):
                     code = re.match(r'^[A-Za-z]+', self.params_map.instrument_id).group()
                     ym_str = self.params_map.ym_str
                     self.index_code = f'{code}{ym_str}'
-
+                    self.option_code = self.get_option_code(code,'P',otm_strike_rounded)
                     self.output(self.open_signal,'-',self.option_code,'-',self.futures_price,'-',self.index_code)
 
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
@@ -301,7 +300,7 @@ class CommodityFutures(BaseStrategy):
                     otm_strike_rounded = int((math.ceil(self.futures_price / strike_interval) + 1) * strike_interval) 
                     code = re.match(r'^[A-Za-z]+', self.params_map.instrument_id).group()
                     ym_str = self.params_map.ym_str 
-                    self.option_code = f"{code}{ym_str}C{otm_strike_rounded}" 
+                    self.option_code = self.get_option_code(code,'C',otm_strike_rounded) 
                     self.index_code = f'{code}{ym_str}'
                     self.output(self.open_signal,'-',self.option_code,'-',self.futures_price,'-',self.index_code)
 

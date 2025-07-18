@@ -127,6 +127,13 @@ class IndexFutures(BaseStrategy):
             exchange=self.params_map.exchange,
             instrument_id=option_code
         ).expire_date
+        self.output(expire_str,'-',option_code)
+        expire_str = self.get_instrument_data(
+            exchange='CFFEX',
+            instrument_id='MO2508-C-6700'
+        ).expire_date
+
+        self.output(expire_str,'-',option_code)
         expire_date = datetime.strptime(expire_str, "%Y%m%d").date()
         
         # 当前日期和剩余到期时间（年化）
