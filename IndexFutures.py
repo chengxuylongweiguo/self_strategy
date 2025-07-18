@@ -22,9 +22,10 @@ class Params(BaseParams):
     middle_value: float = Field(default=0.0, title="网格中间值", ge=0)
     max_value: float = Field(default=0.0, title="网格值", ge=0)
     steps: int = Field(default=12, title="网格层数", ge=1)
-    pay_up: float = Field(default=0.2, title="滑价超价")
+    #pay_up: float = Field(default=0.2, title="滑价超价")
     order_type: str = Field(default="GFD", title="下单类型")
     ym_str: str = Field(default="2508", title="到期月份")
+    options:str = Field(default="", title="期权代码")
     kline_style: KLineStyleType = Field(default="M5", title="K线周期")
     
 
@@ -43,7 +44,8 @@ class IndexFutures(BaseStrategy):
         self.index_price: float = 0.0
         self.option_price: float = 0.0
         self.futures_price: float = 6000.0
-        self.option_code: str 
+        self.option_code: str = self.params_map.options #期权代码
+        self.index_code: str  #和期权同月的期货代码
         self.order_index: bool = False #防止重复下单
         self.open_signal: Union[bool, str] = False
         self.rules: dict = {}
@@ -127,15 +129,8 @@ class IndexFutures(BaseStrategy):
             exchange=self.params_map.exchange,
             instrument_id=option_code
         ).expire_date
-        self.output(expire_str,'-',option_code)
-        expire_str = self.get_instrument_data(
-            exchange='CFFEX',
-            instrument_id='MO2508-C-6700'
-        ).expire_date
-
-        self.output(expire_str,'-',option_code)
-        expire_date = datetime.strptime(expire_str, "%Y%m%d").date()
         
+        expire_date = datetime.strptime(expire_str, "%Y%m%d").date()
         # 当前日期和剩余到期时间（年化）
         today = datetime.now().date()
         days_to_expire = (expire_date - today).days
@@ -165,7 +160,8 @@ class IndexFutures(BaseStrategy):
 
     def on_start(self) -> None:
         self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.params_map.instrument_id)#订阅行情
-        self.sub_market_data(exchange='SSE',instrument_id='000852')#订阅行情
+        self.index_code = f"IM{self.params_map.ym_str}"
+        self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.index_code)#订阅行情
 
         self.kline_generator = KLineGenerator(
             real_time_callback=self.real_time_callback,
@@ -175,15 +171,6 @@ class IndexFutures(BaseStrategy):
             style=self.params_map.kline_style
         )
         
-        self.kline_generator_index = KLineGenerator(
-            real_time_callback=self.real_time_callback_index,
-            callback=self.callback_index,
-            exchange="SSE",
-            instrument_id="000852",
-            style=self.params_map.kline_style
-        )
-
-        self.kline_generator_index.push_history_data()
         self.kline_generator.push_history_data()
         super().on_start()
     
@@ -196,8 +183,9 @@ class IndexFutures(BaseStrategy):
         #self.output(tick.instrument_id)
         super().on_tick(tick)
         self.kline_generator.tick_to_kline(tick)
-        self.kline_generator_index.tick_to_kline(tick)
-        if self.open_signal != False: #当出现信号的时候才接受tick
+        if tick.instrument_id == self.index_code:
+            self.index_price = tick.last_price
+        elif self.open_signal != False: #当出现信号的时候才接受tick
             self.kline_generator_option.tick_to_kline(tick)
 
     #报单回调
@@ -221,6 +209,89 @@ class IndexFutures(BaseStrategy):
                     self.min_value = 2*kline.close - middle_close #不一定是最小值，可能是最大值 下面同理但不影响网格生成
                     self.max_value = middle_close  
                     self.rules = self.main_indicator_data
+            
+                #暴跌信号处理
+                if iv_signal == 'fall':
+                    self.output(self.open_signal)
+                    #获取对应的看跌期权
+                    if self.params_map.options == "":#如果没有手动填入期权代码就自动选择期权
+                        otm_strike_rounded = int(math.floor(self.index_price / 100.0)-1) * 100 
+                        ym_str = self.params_map.ym_str
+                        self.option_code = f"MO{ym_str}-P-{otm_strike_rounded}"
+                    
+                    self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
+                    self.kline_generator_option = KLineGenerator(
+                    real_time_callback=self.real_time_callback_option,
+                    callback=self.callback_option,
+                    exchange=self.params_map.exchange,
+                    instrument_id=self.option_code,
+                    style='M1')
+
+                    #推送历史 K 线数据到回调
+                    self.kline_generator_option.push_history_data()
+                    self.open_signal = iv_signal #更新状态 防止重复触发入场
+                    signal_price = kline.close
+                    self.output('虚值期权：',self.option_code)
+                    
+                    #买入期权
+                    future_pos = 10
+                    delta,gamma = self.calculate_option_greeks(self.option_code)
+                    option_pos = future_pos*2 / (-delta + 8*gamma)
+                    option_pos = math.ceil(option_pos) 
+                    price = self.option_price*1.1
+                    self.order_ids.add(
+                        self.send_order(
+                            exchange=self.params_map.exchange,
+                            instrument_id=self.option_code,
+                            volume=option_pos,
+                            price=price,
+                            market=False,
+                            order_direction="buy"
+                        )
+                    )
+                    time.sleep(3) #等价格更新
+                    
+                #暴涨信号处理
+                elif iv_signal == 'rise':
+                    #获取对应的看涨期权
+                    self.output(self.open_signal)
+                    if self.params_map.options == "":#如果没有手动填入期权代码就自动选择期权
+                        otm_strike_rounded = int(math.ceil(self.index_price / 100.0) + 1) * 100 
+                        ym_str = self.params_map.ym_str
+                        self.option_code = f"MO{ym_str}-C-{otm_strike_rounded}" 
+                    
+                    #订阅行情
+                    self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
+                    self.kline_generator_option = KLineGenerator(
+                    real_time_callback=self.real_time_callback_option,
+                    callback=self.callback_option,
+                    exchange=self.params_map.exchange,
+                    instrument_id=self.option_code,
+                    style='M1')
+                    
+                    #推送历史 K 线数据到回调
+                    self.kline_generator_option.push_history_data()
+                    self.open_signal = iv_signal #更新状态 防止重复触发入
+                    signal_price = kline.close
+                    self.output('虚值期权：',self.option_code)
+                    
+                    future_pos = 10
+                    delta,gamma = self.calculate_option_greeks(self.option_code)
+                    option_pos = future_pos*2 / (delta + 8*gamma)
+                    option_pos = math.ceil(option_pos)
+                    price = self.option_price*1.1
+                    self.order_ids.add(
+                        self.send_order(
+                            exchange=self.params_map.exchange,
+                            instrument_id=self.option_code,
+                            volume=option_pos,
+                            price=price,
+                            market=False,
+                            order_direction="buy"
+                        )
+                    )
+                    time.sleep(3) #等价格更新
+            
             else:#历史推送时执行
                 if iv_signal == 'fall':
                     signal_price = -kline.close
@@ -228,86 +299,6 @@ class IndexFutures(BaseStrategy):
                 elif iv_signal == 'rise':
                     signal_price = kline.close
                     iv_signal = False
-            
-            #暴跌信号处理
-            if iv_signal == 'fall':
-                self.output(self.open_signal)
-                #获取对应的看跌期权
-                otm_strike_rounded = int(math.floor(self.index_price / 100.0)-1) * 100 
-                ym_str = self.params_map.ym_str
-                self.option_code = f"MO{ym_str}-P-{otm_strike_rounded}"
-                
-                self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
-                self.kline_generator_option = KLineGenerator(
-                real_time_callback=self.real_time_callback_option,
-                callback=self.callback_option,
-                exchange=self.params_map.exchange,
-                instrument_id=self.option_code,
-                style='M1')
-
-                #推送历史 K 线数据到回调
-                self.kline_generator_option.push_history_data()
-                self.open_signal = iv_signal #更新状态 防止重复触发入场
-                signal_price = kline.close
-                self.output('虚值期权：',self.option_code)
-                
-                #买入期权
-                future_pos = 10
-                delta,gamma = self.calculate_option_greeks(self.option_code)
-                option_pos = future_pos*2 / (-delta + 8*gamma)
-                option_pos = math.ceil(option_pos) 
-                price = self.option_price*1.1
-                self.order_ids.add(
-                    self.send_order(
-                        exchange=self.params_map.exchange,
-                        instrument_id=self.option_code,
-                        volume=option_pos,
-                        price=price,
-                        market=False,
-                        order_direction="buy"
-                    )
-                )
-                time.sleep(3) #等价格更新
-                
-            #暴涨信号处理
-            if iv_signal == 'rise':
-                #获取对应的看涨期权
-                self.output(self.open_signal)
-                otm_strike_rounded = int(math.ceil(self.index_price / 100.0) + 1) * 100 
-                ym_str = self.params_map.ym_str
-                self.option_code = f"MO{ym_str}-C-{otm_strike_rounded}" 
-                
-                #订阅行情
-                self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
-                self.kline_generator_option = KLineGenerator(
-                real_time_callback=self.real_time_callback_option,
-                callback=self.callback_option,
-                exchange=self.params_map.exchange,
-                instrument_id=self.option_code,
-                style='M1')
-                
-                #推送历史 K 线数据到回调
-                self.kline_generator_option.push_history_data()
-                self.open_signal = iv_signal #更新状态 防止重复触发入
-                signal_price = kline.close
-                self.output('虚值期权：',self.option_code)
-                
-                future_pos = 10
-                delta,gamma = self.calculate_option_greeks(self.option_code)
-                option_pos = future_pos*2 / (delta + 8*gamma)
-                option_pos = math.ceil(option_pos)
-                price = self.option_price*1.1
-                self.order_ids.add(
-                    self.send_order(
-                        exchange=self.params_map.exchange,
-                        instrument_id=self.option_code,
-                        volume=option_pos,
-                        price=price,
-                        market=False,
-                        order_direction="buy"
-                    )
-                )
-                time.sleep(3) #等价格更新
         
         #调节网格
         elif self.params_map.max_value != 0 and self.params_map.middle_value != 0:
@@ -324,7 +315,6 @@ class IndexFutures(BaseStrategy):
         self.max_5_percentile = np.percentile(valid_std.values, self.params_map.quantile) if len(valid_std) > 100 else 0
         self.state_map.close_std = std_series.iloc[-1] if not std_series.empty else 0
         self.latest_ma_std = ma_std_series.iloc[-1] if not ma_std_series.empty else 0
-
 
         """接受 K 线回调"""
         self.widget.recv_kline({
@@ -471,13 +461,7 @@ class IndexFutures(BaseStrategy):
         self.option_price = kline.close
         #self.output(' 期权价格：',self.option_price)
 
-    def real_time_callback_index(self, kline: KLineData) -> None:
-        """使用收到的实时推送 K 线来计算指标并更新线图"""   
-        self.callback_index(kline)
-
-    def callback_index(self, kline: KLineData) -> None:
-        self.index_price = kline.close
-        #self.output(' 指数价格：',self.index_price)
+ 
 
         
     
