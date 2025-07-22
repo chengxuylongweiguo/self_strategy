@@ -189,10 +189,22 @@ class IndexFutures(BaseStrategy):
         elif self.open_signal != False : #当出现信号的时候才接受tick
             self.kline_generator_option.tick_to_kline(tick)
 
+    def on_order_cancel(self, order: OrderData) -> None:
+        """撤单推送回调"""
+        super().on_order_cancel(order)
+        if order.order_id in self.order_ids:
+            self.order_ids.remove(order.order_id)
+            self.output(f"{order.order_id}撤单{self.order_ids}")
+
     #报单回调
     def on_order(self, order: OrderData) -> None:
         self.output(f'合约代码：{order.instrument_id} 订单状态：{order.status} 成交数量：{order.traded_volume} 报单价格：{order.price}')
         super().on_order(order)
+        if order.traded_volume == order.total_volume:
+            if order.order_id in self.order_ids:
+                self.order_ids.remove(order.order_id)
+                self.output(f"委托列表：{self.order_ids}")
+
         
     def callback(self, kline: KLineData) -> None:
         self.futures_price = kline.close #没出现信号和历史推送时画网格用的
@@ -237,17 +249,19 @@ class IndexFutures(BaseStrategy):
                     #买入期权
                     future_pos = 10
                     delta,gamma = self.calculate_option_greeks(self.option_code)
-                    option_pos = future_pos*2 / (-delta + 8*gamma)
+                    option_pos = future_pos*2 / (-delta + 20*gamma)
                     option_pos = math.ceil(option_pos) 
                     self.option_volume = option_pos
                     price = self.option_price*1.001
-                    self.send_order(
-                        exchange=self.params_map.exchange,
-                        instrument_id=self.option_code,
-                        volume=option_pos,
-                        price=price,
-                        market=True,
-                        order_direction="buy"
+                    self.order_ids.add(
+                        self.send_order(
+                            exchange=self.params_map.exchange,
+                            instrument_id=self.option_code,
+                            volume=option_pos,
+                            price=price,
+                            market=True,
+                            order_direction="buy"
+                        )
                     )
                     time.sleep(3) #等价格更新
                     
@@ -277,17 +291,19 @@ class IndexFutures(BaseStrategy):
                     
                     future_pos = 10
                     delta,gamma = self.calculate_option_greeks(self.option_code)
-                    option_pos = future_pos*2 / (delta + 8*gamma)
+                    option_pos = future_pos*2 / (delta + 20*gamma)
                     option_pos = math.ceil(option_pos)
                     self.option_volume = option_pos
                     price = self.option_price*1.001
-                    self.send_order(
-                        exchange=self.params_map.exchange,
-                        instrument_id=self.option_code,
-                        volume=option_pos,
-                        price=price,
-                        market=True,
-                        order_direction="buy"
+                    self.order_ids.add(
+                        self.send_order(
+                            exchange=self.params_map.exchange,
+                            instrument_id=self.option_code,
+                            volume=option_pos,
+                            price=price,
+                            market=True,
+                            order_direction="buy"
+                        )
                     )
                     time.sleep(3) #等价格更新
             
@@ -330,13 +346,15 @@ class IndexFutures(BaseStrategy):
             if self.get_position(self.params_map.instrument_id).net_position == 0 and self.order_index == False: #在已经买进期权的情况下才买入期货因为期货流动性好
                 signal_price = self.futures_price
                 price = self.futures_price*1.001
-                self.send_order(
-                    exchange=self.params_map.exchange,
-                    instrument_id=self.params_map.instrument_id,
-                    volume=10,
-                    price=price,
-                    market=True,
-                    order_direction="buy"
+                self.order_ids.add(
+                    self.send_order(
+                        exchange=self.params_map.exchange,
+                        instrument_id=self.params_map.instrument_id,
+                        volume=10,
+                        price=price,
+                        market=True,
+                        order_direction="buy"
+                    )
                 )
                 self.order_index = True
                 return
@@ -348,16 +366,18 @@ class IndexFutures(BaseStrategy):
                     delta,gamma = self.calculate_option_greeks(self.option_code)
                     
                     future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                    option_pos = int(future_pos*2 / (-delta + 8*gamma))
+                    option_pos = int(future_pos*2 / (-delta + 20*gamma))
                     #option_pos = math.ceil(option_pos) 
-                    
                     current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
                     delta_position = option_pos - current_pos
                     self.output("期权价格:",self.option_price,"指数价格:",self.index_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
                     
-                    self.option_volume = option_pos
+                    #self.option_volume = option_pos
                     
                     if delta_position > 0 and self.futures_price > target_price: #需要加仓 要满足价格小于网格价格
+                        for order_id in self.order_ids:#全部撤单再进行调仓
+                            self.cancel_order(order_id)
+                        self.option_volume = option_pos
                         price =  self.option_price * 1.001
                         signal_price = self.futures_price
                         self.order_ids.add(
@@ -372,6 +392,9 @@ class IndexFutures(BaseStrategy):
                         )
 
                     elif delta_position < 0 and self.futures_price < target_price: # 需要减仓 要满足价格大于网格价格
+                        for order_id in self.order_ids:#全部撤单再进行调仓
+                            self.cancel_order(order_id)
+                        self.option_volume = option_pos
                         price = self.option_price*0.999
                         signal_price = -self.futures_price
                         self.order_ids.add(
@@ -380,7 +403,7 @@ class IndexFutures(BaseStrategy):
                                 instrument_id=self.option_code,
                                 volume=abs(delta_position),
                                 price=price,
-                                market=False,
+                                market=True,
                                 order_direction="sell"
                             )
                         )
@@ -401,7 +424,6 @@ class IndexFutures(BaseStrategy):
                 )
                 self.order_index = True
                 
-            
             elif self.get_position(self.params_map.instrument_id).net_position == -10:
                 key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - self.futures_price))
                 if key != self.key:
@@ -409,15 +431,18 @@ class IndexFutures(BaseStrategy):
                     delta,gamma = self.calculate_option_greeks(self.option_code)
 
                     future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                    option_pos = int(-future_pos*2 / (delta + 8*gamma))
+                    option_pos = int(-future_pos*2 / (delta + 20*gamma))
                     #option_pos = math.ceil(option_pos) 
                     current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
                     delta_position = option_pos - current_pos
                     self.output("期权价格:",self.option_price,"指数价格:",self.index_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
                     
-                    self.option_volume = option_pos
+                    #self.option_volume = option_pos
 
                     if delta_position > 0 and self.futures_price < target_price: #需要加仓 要满足价格小于网格价格
+                        for order_id in self.order_ids:#全部撤单再进行调仓
+                            self.cancel_order(order_id)
+                        self.option_volume = option_pos
                         price =  self.option_price*1.001
                         signal_price = self.futures_price
                         self.order_ids.add(
@@ -432,6 +457,9 @@ class IndexFutures(BaseStrategy):
                         )
                     
                     elif delta_position < 0 and self.futures_price > target_price: # 需要减仓 要满足价格大于网格价格
+                        for order_id in self.order_ids:#全部撤单再进行调仓
+                            self.cancel_order(order_id)
+                        self.option_volume = option_pos
                         price = self.option_price*0.999
                         signal_price = -self.futures_price
                         self.order_ids.add(
@@ -440,7 +468,7 @@ class IndexFutures(BaseStrategy):
                                 instrument_id=self.option_code,
                                 volume=abs(delta_position),
                                 price=price,
-                                market=False,
+                                market=True,
                                 order_direction="sell"
                             )
                         )
