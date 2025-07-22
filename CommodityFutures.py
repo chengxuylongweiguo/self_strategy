@@ -25,7 +25,7 @@ class Params(BaseParams):
     max_value: float = Field(default=0.0, title="网格值", ge=0)
     steps: int = Field(default=12, title="网格层数", ge=1)
     pay_up: float = Field(default=0.2, title="滑价超价")
-    order_type: bool = Field(default=False, title="下单类型")
+    order_type: bool = Field(default=False, title="市价单")
     ym_str: str = Field(default="2508", title="到期月份")
     options:str = Field(default="", title="期权代码")
     kline_style: KLineStyleType = Field(default="M5", title="K线周期")
@@ -251,69 +251,59 @@ class CommodityFutures(BaseStrategy):
         #self.output(tick.instrument_id)
         super().on_tick(tick)
         if tick.last_price != 0:
-            self.kline_generator.tick_to_kline(tick)
-            if tick.instrument_id == self.option_code : #当出现信号的时候才接受tick
-                self.kline_generator_option.tick_to_kline(tick)
-                self.option_price = tick.last_price #更新期权价格
-                if self.order_dict and tick.instrument_id == self.order_dict['instrument_id']:
+            if self.order_dict and tick.instrument_id == self.order_dict['instrument_id']: #当推送标的的tick时下单
+                if self.order_dict['order_direction'] == 'buy':
+                    price = tick.ask_price1  # 买入 -> 使用卖一价
+                elif self.order_dict['order_direction'] == 'sell':
+                    price = tick.bid_price1  # 卖出 -> 使用买一价
+
+                if self.order_dict['direction'] == 'buy':
                     self.order_ids.add(
                         self.send_order(
                                 exchange=self.params_map.exchange,
                                 instrument_id=self.order_dict['instrument_id'],
                                 volume=self.order_dict['volume'],
-                                price=(tick.ask_price3+tick.bid_price3)/2,
-                                market=False,
-                                order_direction="buy"
+                                price=price,
+                                market=self.params_map.order_type,
+                                order_direction=self.order_dict['order_direction']
                             )
                     )
                     self.order_dict = {}
-
-            elif tick.instrument_id == self.params_map.instrument_id and self.order_dict: #当推送标的的tick时下单
-                if tick.instrument_id == self.order_dict['instrument_id']:
-                    if self.order_dict['direction'] == 'buy':
-                        self.order_ids.add(
-                            self.send_order(
-                                    exchange=self.params_map.exchange,
-                                    instrument_id=self.order_dict['instrument_id'],
-                                    volume=self.order_dict['volume'],
-                                    price=(tick.ask_price3+tick.bid_price3)/2,
-                                    market=False,
-                                    order_direction=self.order_dict['order_direction']
-                                )
+                
+                elif self.order_dict['direction'] == 'sell':
+                    self.order_ids.add(
+                        self.auto_close_position(
+                            exchange=self.params_map.exchange,
+                            instrument_id=self.order_dict['instrument_id'],
+                            volume=self.order_dict['volume'],
+                            price=price,
+                            market=self.params_map.order_type,
+                            order_direction=self.order_dict['order_direction']
                         )
-                    
-                    elif self.order_dict['direction'] == 'sell':
-                        self.order_ids.add(
-                            self.auto_close_position(
-                                exchange=self.params_map.exchange,
-                                instrument_id=self.order_dict['instrument_id'],
-                                volume=self.order_dict['volume'],
-                                price=(tick.ask_price3+tick.bid_price3)/2,
-                                market=False,
-                                order_direction=self.order_dict['order_direction']
-                            )
-                        )
-
+                    )
                     self.order_dict = {}
-            elif tick.instrument_id == self.index_code:
-                self.index_price = tick.last_price  #更新当月期货价格
+                
+            if tick.instrument_id == self.option_code : #当推送期权的tick时
+                self.option_price = tick.last_price #更新期权价格
+                
+            if tick.instrument_id == self.index_code:
+                self.index_price = tick.last_price  #更新对应期权到期日当月期货指数价格
 
-    def on_order_cancel(self, order: OrderData) -> None:
-        """撤单推送回调"""
-        self.output(f"{order.order_id}撤单回调")
-        super().on_order_cancel(order)
-        if order.order_id in self.order_ids:
-            self.order_ids.remove(order.order_id)
-            self.output(f"{order.order_id}撤单{self.order_ids}")
-        
+            self.kline_generator.tick_to_kline(tick)
+
     #报单回调
     def on_order(self, order: OrderData) -> None:
         self.output(f'合约代码：{order.instrument_id} 订单状态：{order.status} 成交数量：{order.traded_volume}')
         super().on_order(order)
-        if order.traded_volume == order.total_volume:
+        if order.traded_volume == order.total_volume:#完全成交时删除委托记录
             if order.order_id in self.order_ids:
                 self.order_ids.remove(order.order_id)
-                self.output(f"委托列表：{self.order_ids}")
+                self.output(f"未成交委托列表：{self.order_ids}")
+
+        elif order.status == '已撤销' :##撤单时删除委托记录
+            if order.order_id in self.order_ids:
+                self.order_ids.remove(order.order_id)
+                self.output(f"{order.order_id}撤单{self.order_ids}")
 
     def callback(self, kline: KLineData) -> None:
         self.futures_price = kline.close #没出现信号和历史推送时画网格用的,计算gamma
@@ -340,43 +330,26 @@ class CommodityFutures(BaseStrategy):
                         strike_interval = self.interval_map[code]
                         otm_strike_rounded = int((math.floor(self.index_price / strike_interval)-1) * strike_interval) 
                         self.option_code = self.get_option_code(code,'P',otm_strike_rounded) #月份需要手动输入
-                    
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.index_code) #订阅当月期货行情用于计算gamma
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
                     self.kline_generator_option = KLineGenerator(
-                    real_time_callback=self.real_time_callback_option,
                     callback=self.callback_option,
                     exchange=self.params_map.exchange,
                     instrument_id=self.option_code,
                     style='M1')
                     self.kline_generator_option.push_history_data()
                     
-                    #推送历史 K 线数据到回调
                     self.open_signal = iv_signal #更新状态 防止重复触发入场
                     signal_price = self.futures_price
-                    time.sleep(10)
-                    #买入期权
-                    self.output(self.open_signal,'-',self.option_code,'-',self.futures_price,'-',self.index_price,'-',self.option_price)
-
+                    
                     future_pos = 50
                     delta,gamma = self.calculate_option_greeks(self.option_code,self.index_price,'PUT')
-                    option_pos = future_pos / ((-delta + 20*gamma)*2)
+                    option_pos = future_pos / ((-delta + 2*gamma))
                     option_pos = math.ceil(option_pos)
                     self.futures_volume = option_pos
-                    price = self.option_price*1.001
-                    if not self.params_map.order_type:
-                        self.order_dict = {"instrument_id":self.option_code,"volume":option_pos}
-                    else:
-                        self.order_ids.add(
-                            self.send_order(
-                                exchange=self.params_map.exchange,
-                                instrument_id=self.option_code,
-                                volume=option_pos,
-                                price=price,
-                                market=self.params_map.order_type,
-                                order_direction="buy"
-                            )
-                        )
+                    self.output('期权代码：',self.option_code,'买入数量：',option_pos,'买入价格：',self.option_price)
+                    #买入期权
+                    self.order_dict = {"instrument_id":self.option_code,"volume":option_pos,'order_direction':"buy",'direction':"buy"}
                         
                 #暴涨信号处理
                 elif iv_signal == 'rise':
@@ -386,12 +359,9 @@ class CommodityFutures(BaseStrategy):
                         strike_interval = self.interval_map[code]
                         otm_strike_rounded = int((math.ceil(self.index_price / strike_interval) + 1) * strike_interval) 
                         self.option_code = self.get_option_code(code,'C',otm_strike_rounded) #月份需要手动输入
-                    self.output(self.open_signal,'-',self.option_code,'-',self.futures_price,'-',self.index_code)
-
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.index_code) #订阅当月期货行情用于计算gamma
                     self.sub_market_data(exchange=self.params_map.exchange,instrument_id=self.option_code) #订阅虚值行情
                     self.kline_generator_option = KLineGenerator(
-                    real_time_callback=self.real_time_callback_option,
                     callback=self.callback_option,
                     exchange=self.params_map.exchange,
                     instrument_id=self.option_code,
@@ -400,29 +370,16 @@ class CommodityFutures(BaseStrategy):
                       
                     self.open_signal = iv_signal #更新状态 防止重复触发入场
                     signal_price = self.futures_price
-                    time.sleep(10)
+                    
                     future_pos = 50
-                    self.output(self.open_signal,'-',self.option_code,'-',self.futures_price,'-',self.index_price,'-',self.option_price)
-
                     delta,gamma = self.calculate_option_greeks(self.option_code,self.index_price,'CALL')
                     option_pos = future_pos / ((delta + 20*gamma)*2)
                     option_pos = math.ceil(option_pos)
                     self.futures_volume = option_pos
-                    price = self.option_price*1.001
-                    self.output('期权代码：',self.option_code,'买入数量：',option_pos,'买入价格：',price)
-                    if not self.params_map.order_type:#如果不是市价单则在tick里下单
-                        self.order_dict = {"instrument_id":self.option_code,"volume":option_pos}
-                    else:
-                        self.order_ids.add(
-                            self.send_order(
-                                exchange=self.params_map.exchange,
-                                instrument_id=self.option_code,
-                                volume=option_pos,
-                                price=price,
-                                market=self.params_map.order_type,
-                                order_direction="buy"
-                            )
-                        )
+                    self.output('期权代码：',self.option_code,'买入数量：',option_pos,'买入价格：',self.option_price)
+
+                    #买入期权
+                    self.order_dict = {"instrument_id":self.option_code,"volume":option_pos,'order_direction':"buy",'direction':"buy"}
                 
             else:#历史推送时执行
                 if iv_signal == 'fall':
@@ -432,6 +389,7 @@ class CommodityFutures(BaseStrategy):
                     signal_price = self.futures_price
                     iv_signal = False
 
+        #手动设置网格
         elif self.params_map.max_value != 0 and self.params_map.middle_value != 0:
             self.min_value = self.params_map.max_value #不一定是最小值，可能是最大值 下面同理但不影响网格生成
             self.max_value = self.params_map.middle_value 
@@ -475,41 +433,15 @@ class CommodityFutures(BaseStrategy):
                 if delta_position > 0 and self.futures_price < target_price: #需要加仓 要满足价格小于网格价格
                     for order_id in self.order_ids:#全部撤单再进行调仓
                         self.cancel_order(order_id)
-                    price = self.futures_price*1.001
                     signal_price = self.futures_price
-                    if not self.params_map.order_type:
-                        self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":delta_position,'order_direction':"buy",'direction':"buy"}
-                    else:
-                        self.order_ids.add(
-                            self.send_order( 
-                                exchange=self.params_map.exchange, 
-                                instrument_id=self.params_map.instrument_id, 
-                                volume=delta_position, 
-                                price=price, 
-                                market=self.params_map.order_type, 
-                                order_direction="buy"
-                            )
-                        )
-
+                    self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":delta_position,'order_direction':"buy",'direction':"buy"}
+                    
                 elif delta_position < 0 and self.futures_price > target_price: # 需要减仓 要满足价格大于网格价格
                     for order_id in self.order_ids:#全部撤单再进行调仓
                         self.cancel_order(order_id)
-                    price = self.futures_price*0.999
-                    signal_price =-self.futures_price
-                    if not self.params_map.order_type:
-                        self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":abs(delta_position),'order_direction':"sell",'direction':"sell"}
-                    else:
-                        self.order_ids.add(
-                            self.auto_close_position(
-                                exchange=self.params_map.exchange,
-                                instrument_id=self.params_map.instrument_id,
-                                volume=abs(delta_position),
-                                price=price,
-                                market=self.params_map.order_type,
-                                order_direction="sell"
-                            )
-                        )
-
+                    signal_price = -self.futures_price
+                    self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":abs(delta_position),'order_direction':"sell",'direction':"sell"}
+                    
         if self.open_signal == 'rise' and self.get_position(self.option_code).net_position == self.futures_volume:
             key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - self.futures_price))
             if key != self.key:
@@ -524,43 +456,17 @@ class CommodityFutures(BaseStrategy):
                 delta_position = future_pos - current_pos
                 self.output("期权价格:",self.option_price,'delta:',delta,'gamma:',gamma,'仓位变化：',delta_position)
 
-                if delta_position > 0 and self.futures_price > target_price: #需要加仓 要满足价格小于网格价格
+                if delta_position > 0 and self.futures_price > target_price: #需要加仓 要满足价格大于网格价格
                     for order_id in self.order_ids:#全部撤单再进行调仓
                         self.cancel_order(order_id)
-                    price =  self.futures_price*0.999
                     signal_price = -self.futures_price
-                    if not self.params_map.order_type:
-                        self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":delta_position,'order_direction':"sell",'direction':"buy"}
-                    else:
-                        self.order_ids.add(
-                            self.send_order(
-                                exchange=self.params_map.exchange,
-                                instrument_id=self.params_map.instrument_id,
-                                volume=delta_position,
-                                price=price,
-                                market=self.params_map.order_type,
-                                order_direction="sell"
-                            )
-                        )
+                    self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":delta_position,'order_direction':"sell",'direction':"buy"}
                 
-                elif delta_position < 0 and self.futures_price < target_price: # 需要减仓 要满足价格大于网格价格
+                elif delta_position < 0 and self.futures_price < target_price: # 需要减仓 要满足价格小于网格价格
                     for order_id in self.order_ids:#全部撤单再进行调仓
                         self.cancel_order(order_id)
-                    price = self.futures_price*1.001
                     signal_price = self.futures_price
-                    if not self.params_map.order_type:
-                        self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":abs(delta_position),'order_direction':"buy",'direction':"sell"}
-                    else:
-                        self.order_ids.add(
-                            self.auto_close_position(
-                                exchange=self.params_map.exchange,
-                                instrument_id=self.params_map.instrument_id,
-                                volume=abs(delta_position),
-                                price=price,
-                                market=self.params_map.order_type,
-                                order_direction="buy"
-                            )
-                        )
+                    self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":abs(delta_position),'order_direction':"buy",'direction':"sell"}
                 
         """接受 K 线回调"""
         self.widget.recv_kline({
@@ -568,10 +474,6 @@ class CommodityFutures(BaseStrategy):
             "signal_price": signal_price,
             **self.main_indicator_data,
             **self.sub_indicator_data})
-    
-    def real_time_callback_option(self, kline: KLineData) -> None:
-        """使用收到的实时推送 K 线来计算指标并更新线图"""
-        self.callback_option(kline)
     
     def callback_option(self, kline: KLineData) -> None:
         self.option_price = kline.close
