@@ -81,7 +81,6 @@ class CommodityFutures(BaseStrategy):
     "si": 100,
     "pp": 100,
     "l":100,
-    'si':100,
 }
     
     @property
@@ -256,10 +255,10 @@ class CommodityFutures(BaseStrategy):
         if tick.last_price != 0:
             if self.order_dict and tick.instrument_id == self.order_dict['instrument_id']: #当推送标的的tick时下单
                 if self.order_dict['order_direction'] == 'buy':
-                    price = tick.ask_price3 if tick.ask_price3 != 0 else tick.ask_price1 # 买入 -> 使用卖一价
+                    price = tick.ask_price3  # 买入 -> 使用卖一价
                 elif self.order_dict['order_direction'] == 'sell':
-                    price = tick.bid_price3 if tick.bid_price3 != 0 else tick.bid_price1 # 卖出 -> 使用买一价
-                    
+                    price = tick.bid_price3  # 卖出 -> 使用买一价
+
                 if self.order_dict['direction'] == 'buy':
                     self.order_ids.add(
                         self.send_order(
@@ -421,7 +420,6 @@ class CommodityFutures(BaseStrategy):
         signal_price = 0 #初始化买卖图像信号
         if self.open_signal == 'fall' and self.get_position(self.option_code).net_position == self.futures_volume:
             key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - self.futures_price)) 
-
             if key != self.key:
                 self.key = key #更新网格状态
                 delta,gamma = self.calculate_option_greeks(self.option_code,self.index_price,'PUT') 
