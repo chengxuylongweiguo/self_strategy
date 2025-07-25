@@ -238,7 +238,6 @@ class IndexFutures(BaseStrategy):
                 self.order_ids.remove(order.order_id)
                 self.output(f"委托列表：{self.order_ids}")
 
-        
     def callback(self, kline: KLineData) -> None:
         self.futures_price = kline.close #没出现信号和历史推送时画网格用的
         signal_price = 0
@@ -261,7 +260,7 @@ class IndexFutures(BaseStrategy):
                     self.output(self.open_signal)
                     #获取对应的看跌期权
                     if self.params_map.options == "":#如果没有手动填入期权代码就自动选择期权
-                        otm_strike_rounded = int(math.floor(self.index_price / 100.0)-1) * 100 
+                        otm_strike_rounded = int(math.floor(self.index_price / 100.0)) * 100 
                         ym_str = self.params_map.ym_str
                         self.option_code = f"MO{ym_str}-P-{otm_strike_rounded}"
                     
@@ -280,9 +279,9 @@ class IndexFutures(BaseStrategy):
                     self.output('虚值期权：',self.option_code)
                     
                     #买入期权
-                    future_pos = 10
+                    future_pos = 5
                     delta,gamma = self.calculate_option_greeks(self.option_code)
-                    option_pos = future_pos*2 / (-delta + 20*gamma)
+                    option_pos = future_pos*2 / (-delta + 200*gamma)
                     option_pos = math.ceil(option_pos) 
                     self.option_volume = option_pos
                     
@@ -295,7 +294,7 @@ class IndexFutures(BaseStrategy):
                     #获取对应的看涨期权
                     self.output(self.open_signal)
                     if self.params_map.options == "":#如果没有手动填入期权代码就自动选择期权
-                        otm_strike_rounded = int(math.ceil(self.index_price / 100.0) + 1) * 100 
+                        otm_strike_rounded = int(math.ceil(self.index_price / 100.0)) * 100 
                         ym_str = self.params_map.ym_str
                         self.option_code = f"MO{ym_str}-C-{otm_strike_rounded}" 
                     
@@ -314,9 +313,9 @@ class IndexFutures(BaseStrategy):
                     signal_price = kline.close
                     self.output('虚值期权：',self.option_code)
                     
-                    future_pos = 10
+                    future_pos = 5
                     delta,gamma = self.calculate_option_greeks(self.option_code)
-                    option_pos = future_pos*2 / (delta + 20*gamma)
+                    option_pos = future_pos*2 / (delta + 200*gamma)
                     option_pos = math.ceil(option_pos)
                     self.option_volume = option_pos
                     
@@ -363,18 +362,18 @@ class IndexFutures(BaseStrategy):
             if self.get_position(self.params_map.instrument_id).net_position == 0 and self.order_index == False: #在已经买进期权的情况下才买入期货因为期货流动性好
                 signal_price = self.futures_price
                 #买入期货
-                self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":10,'order_direction':"buy",'direction':"buy"}
+                self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":5,'order_direction':"buy",'direction':"buy"}
                 self.order_index = True
                 return
 
-            elif self.get_position(self.params_map.instrument_id).net_position == 10: #已经持有期货就进行期权的调仓
+            elif self.get_position(self.params_map.instrument_id).net_position == 5: #已经持有期货就进行期权的调仓
                 key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - self.futures_price))
                 if key != self.key:
                     self.key = key #更新网格状态
                     delta,gamma = self.calculate_option_greeks(self.option_code)
                     
                     future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                    option_pos = int(future_pos*2 / (-delta + 20*gamma))
+                    option_pos = int(future_pos*2 / (-delta + 200*gamma))
                     #option_pos = math.ceil(option_pos) 
                     current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
                     delta_position = option_pos - current_pos
@@ -408,17 +407,17 @@ class IndexFutures(BaseStrategy):
                 signal_price = -self.futures_price
                 
                 #买入期权
-                self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":10,'order_direction':"sell",'direction':"buy"}
+                self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":5,'order_direction':"sell",'direction':"buy"}
                 self.order_index = True
                 
-            elif self.get_position(self.params_map.instrument_id).net_position == -10:
+            elif self.get_position(self.params_map.instrument_id).net_position == -5:
                 key, target_price = min(self.rules.items(), key=lambda x: abs(x[1] - self.futures_price))
                 if key != self.key:
                     self.key = key #更新网格状态
                     delta,gamma = self.calculate_option_greeks(self.option_code)
 
                     future_pos = self.get_position(self.params_map.instrument_id).net_position # 获取当前option净仓位
-                    option_pos = int(-future_pos*2 / (delta + 20*gamma))
+                    option_pos = int(-future_pos*2 / (delta + 200*gamma))
                     #option_pos = math.ceil(option_pos) 
                     current_pos = self.get_position(self.option_code).net_position # 2. 获取当前futures净仓位
                     delta_position = option_pos - current_pos

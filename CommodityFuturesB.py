@@ -352,7 +352,7 @@ class CommodityFuturesB(BaseStrategy):
                     self.open_signal = iv_signal #更新状态 防止重复触发入场
                     signal_price = self.futures_price
                     
-                    future_pos = 50
+                    future_pos = 10
                     delta,gamma = self.calculate_option_greeks(self.option_code,self.index_price,'PUT')
                     option_pos = future_pos / ((-delta + 2*gamma))
                     option_pos = math.ceil(option_pos)   
@@ -360,6 +360,7 @@ class CommodityFuturesB(BaseStrategy):
                     #生成价格持仓量字典
                     volume_step = (-option_pos) / (self.params_map.steps)
                     self.rules = {rules[f'P{i}']:round(option_pos + i * volume_step) for i in range(self.params_map.steps + 1)}
+                    self.output(self.rules)
                     
                     self.output('期权代码：',self.option_code,'买入数量：',option_pos,'买入价格：',self.option_price)
                     #买入期权
@@ -386,7 +387,7 @@ class CommodityFuturesB(BaseStrategy):
                     self.open_signal = iv_signal #更新状态 防止重复触发入场
                     signal_price = self.futures_price
                     
-                    future_pos = 50
+                    future_pos = 10
                     delta,gamma = self.calculate_option_greeks(self.option_code,self.index_price,'CALL')
                     option_pos = future_pos / ((delta + 20*gamma))
                     option_pos = math.ceil(option_pos)
@@ -394,6 +395,7 @@ class CommodityFuturesB(BaseStrategy):
                     #生成价格持仓量字典
                     volume_step = (-option_pos) / (self.params_map.steps)
                     self.rules = {rules[f'P{i}']:round(option_pos + i * volume_step) for i in range(self.params_map.steps + 1)}
+                    self.output(self.rules)
                     
                     self.output('期权代码：',self.option_code,'买入数量：',option_pos,'买入价格：',self.option_price)
                     #买入期权
@@ -411,7 +413,11 @@ class CommodityFuturesB(BaseStrategy):
         elif self.params_map.max_value != 0 and self.params_map.middle_value != 0:
             self.min_value = self.params_map.max_value #不一定是最小值，可能是最大值 下面同理但不影响网格生成
             self.max_value = self.params_map.middle_value 
-            self.rules = self.main_indicator_data
+            rules = self.main_indicator_data
+            option_pos = self.get_position(self.option_code).net_position
+            volume_step = (-option_pos) / (self.params_map.steps)
+            self.rules = {rules[f'P{i}']:round(option_pos + i * volume_step) for i in range(self.params_map.steps + 1)}
+            self.output(self.rules)
         
         #更新副图指标值
         close_array = self.kline_generator.producer.close
@@ -447,9 +453,9 @@ class CommodityFuturesB(BaseStrategy):
             rules_volume = self.detect_rule_cross(self.rules,self.futures_price,kline.close)
             self.futures_price = kline.close #顺序不能变
             
-            if rules_volume is not None and self.key != rules_volume and self.get_position(self.params_map.instrument_id).net_position == self.order_futures:
+            if rules_volume != None and self.key != rules_volume and self.order_futures != 0:
                 self.key = rules_volume
-
+                
                 current_pos = self.get_position(self.params_map.instrument_id).net_position
                 delta_position = rules_volume - current_pos
 
@@ -477,7 +483,7 @@ class CommodityFuturesB(BaseStrategy):
             rules_volume = self.detect_rule_cross(self.rules,self.futures_price,kline.close)
             self.futures_price = kline.close #顺序不能变
             
-            if rules_volume is not None and self.key != rules_volume and self.get_position(self.params_map.instrument_id).net_position == self.order_futures:
+            if rules_volume is not None and self.key != rules_volume and self.order_futures != 0:
                 self.key = rules_volume
 
                 current_pos = -self.get_position(self.params_map.instrument_id).net_position
