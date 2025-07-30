@@ -82,6 +82,8 @@ class CommodityFuturesB(BaseStrategy):
     "pp": 100,
     "l":100,
     'si':100,
+    "pp":100,
+    'pg':50
 }
     
     @property
