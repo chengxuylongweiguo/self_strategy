@@ -356,7 +356,7 @@ class CommodityFuturesB(BaseStrategy):
                     
                     future_pos = 10
                     delta,gamma = self.calculate_option_greeks(self.option_code,self.index_price,'PUT')
-                    option_pos = future_pos / ((-delta + 2*gamma))
+                    option_pos = future_pos / ((-delta + 20*gamma))
                     option_pos = math.ceil(option_pos)   
                     self.option_volume = option_pos
                     #生成价格持仓量字典
@@ -474,12 +474,12 @@ class CommodityFuturesB(BaseStrategy):
         if self.open_signal == 'rise' and self.get_position(self.option_code).net_position == self.option_volume:
             if self.order_futures == 0:
                 #计算期货持仓量
-                delta,gamma = self.calculate_option_greeks(self.option_code,self.index_price,'PUT') 
+                delta,gamma = self.calculate_option_greeks(self.option_code,self.index_price,'CALL') 
                 option_pos = self.get_position(self.option_code).net_position # 获取当前option净仓位
                 future_pos = option_pos * (delta + 20*gamma)
                 future_pos = math.ceil(future_pos) 
                 #下单
-                self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":future_pos,'order_direction':"buy",'direction':"buy"}
+                self.order_dict = {"instrument_id":self.params_map.instrument_id,"volume":future_pos,'order_direction':"sell",'direction':"buy"}
                 self.order_futures = future_pos
 
             rules_volume = self.detect_rule_cross(self.rules,self.futures_price,kline.close)
@@ -487,7 +487,6 @@ class CommodityFuturesB(BaseStrategy):
             
             if rules_volume is not None and self.key != rules_volume and self.order_futures != 0:
                 self.key = rules_volume
-
                 current_pos = -self.get_position(self.params_map.instrument_id).net_position
                 delta_position = rules_volume - current_pos
 
